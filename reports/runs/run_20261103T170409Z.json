@@ -1,0 +1,9 @@
+{
+  "pipeline": "alzheimer-data-collector",
+  "run_id": "20261103T170409Z",
+  "contract_version": "1.0",
+  "source_requested": "data/source_download/incident_empty.csv",
+  "status": "FAIL",
+  "error": "No columns to parse from file",
+  "duration_seconds": 0.02
+}

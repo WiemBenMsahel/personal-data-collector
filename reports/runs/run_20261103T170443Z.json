@@ -1,0 +1,9 @@
+{
+  "pipeline": "alzheimer-data-collector",
+  "run_id": "20261103T170443Z",
+  "contract_version": "1.0",
+  "source_requested": "data/source_download/fichier_inexistant.csv",
+  "status": "FAIL",
+  "error": "Source introuvable : data\\source_download\\fichier_inexistant.csv",
+  "duration_seconds": 0.0
+}

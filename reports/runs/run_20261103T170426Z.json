@@ -1,0 +1,9 @@
+{
+  "pipeline": "alzheimer-data-collector",
+  "run_id": "20261103T170426Z",
+  "contract_version": "1.0",
+  "source_requested": "data/source_download/incident_all_invalid.csv",
+  "status": "FAIL",
+  "error": "Taux de rejet 100.0% > seuil 20% : publication bloquee",
+  "duration_seconds": 0.09
+}
