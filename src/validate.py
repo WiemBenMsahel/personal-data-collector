@@ -38,3 +38,13 @@ def validate(df: pd.DataFrame):
     rejected = df[df["reject_reason"] != ""]
     accepted = df[df["reject_reason"] == ""].drop(columns="reject_reason")
     return accepted, rejected, stats
+
+REQUIRED_COLUMNS = ["PatientID", "Age", "Gender", "BMI", "Hypertension", "SystolicBP",
+                    "DiastolicBP", "CholesterolTotal", "MMSE", "MemoryComplaints", "Diagnosis"]
+
+def check_schema(df: pd.DataFrame) -> None:
+    if df.empty:
+        raise ValueError("Fichier vide : aucune ligne a traiter")
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"Changement de schema : colonnes manquantes {missing}")
