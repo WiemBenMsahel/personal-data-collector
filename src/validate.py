@@ -1,5 +1,6 @@
 import pandas as pd
 
+
 def profile(df: pd.DataFrame) -> dict:
     return {
         "rows": int(df.shape[0]), "columns": int(df.shape[1]),
@@ -11,40 +12,52 @@ def profile(df: pd.DataFrame) -> dict:
         "diagnosis_counts": df["Diagnosis"].value_counts(dropna=False).to_dict(),
     }
 
+
 num = lambda s: pd.to_numeric(s, errors="coerce")
 
-# (nom, condition de validite, action)
-RULES = [
-    ("patient_id_present",    lambda d: d["PatientID"].notna(),                        "reject"),
-    ("age_valid",             lambda d: num(d["Age"]).between(0, 120),                 "reject"),
-    ("mmse_range",            lambda d: num(d["MMSE"]).between(0, 30),                 "reject"),
-    ("diagnosis_domain",      lambda d: num(d["Diagnosis"]).isin([0, 1]),              "reject"),
-    ("bp_coherent",           lambda d: num(d["DiastolicBP"]) < num(d["SystolicBP"]),  "reject"),
-    ("cholesterol_plausible", lambda d: num(d["CholesterolTotal"]).between(100, 400),  "flag"),
-]
 
-def validate(df: pd.DataFrame):
+def build_condition(rule: dict, src: dict):
+    """Transforme une regle du contrat en fonction qui renvoie True si la ligne est valide."""
+    col, t = src[rule["column"]], rule["type"]
+    if t == "not_null":
+        return lambda d: d[col].notna()
+    if t == "range":
+        return lambda d: num(d[col]).between(rule["min"], rule["max"])
+    if t == "domain":
+        return lambda d: num(d[col]).isin(rule["values"])
+    if t == "less_than":
+        other = src[rule["other"]]
+        return lambda d: num(d[col]) < num(d[other])
+    raise ValueError(f"Type de regle inconnu dans le contrat : {t}")
+
+
+def validate(df: pd.DataFrame, contract: dict):
+    src = contract["_src"]
+    key = src[contract["business_key"]]
     df = df.copy()
     df["reject_reason"] = ""
     stats = {}
-    dup = df.duplicated("PatientID", keep="first") & df["PatientID"].notna()
-    stats["duplicate_patient_id"] = int(dup.sum())
-    df.loc[dup, "reject_reason"] += "duplicate_patient_id;"
-    for name, cond, action in RULES:
-        fail = ~cond(df)
-        stats[name] = int(fail.sum())
-        if action == "reject":
-            df.loc[fail, "reject_reason"] += name + ";"
+    for rule in contract["quality_rules"]:
+        if rule["type"] == "unique":
+            fail = df.duplicated(src[rule["column"]], keep="first") & df[key].notna()
+        else:
+            fail = ~build_condition(rule, src)(df)
+        stats[rule["name"]] = int(fail.sum())
+        if rule["action"] == "reject":
+            df.loc[fail, "reject_reason"] += rule["name"] + ";"
     rejected = df[df["reject_reason"] != ""]
     accepted = df[df["reject_reason"] == ""].drop(columns="reject_reason")
     return accepted, rejected, stats
 
-REQUIRED_COLUMNS = ["PatientID", "Age", "Gender", "BMI", "Hypertension", "SystolicBP",
-                    "DiastolicBP", "CholesterolTotal", "MMSE", "MemoryComplaints", "Diagnosis"]
 
-def check_schema(df: pd.DataFrame) -> None:
+def check_schema(df: pd.DataFrame, contract: dict) -> None:
     if df.empty:
         raise ValueError("Fichier vide : aucune ligne a traiter")
-    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    missing = [c["source"] for c in contract["columns"] if c["source"] not in df.columns]
     if missing:
         raise ValueError(f"Changement de schema : colonnes manquantes {missing}")
+    for c in contract["columns"]:
+        if c["type"] in ("integer", "float"):
+            values = df[c["source"]].dropna()
+            if len(values) and num(values).isna().all():
+                raise ValueError(f"Changement de schema : colonne {c['source']} non numerique")

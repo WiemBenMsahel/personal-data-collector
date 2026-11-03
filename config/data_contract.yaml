@@ -1,16 +1,32 @@
 dataset: alzheimer_clinical_curated
-version: 1.0
-grain: une ligne represente un patient avec son bilan clinique et son diagnostic
+version: "1.1"
 owner: Wiem Ben M'sahel
 source: Kaggle - Alzheimer's Disease Dataset (Rabie El Kharoua)
+grain: une ligne represente un patient avec son bilan clinique et son diagnostic
 business_key: patient_id
-required_fields: [patient_id, age, gender, systolic_bp, diastolic_bp, cholesterol_total, mmse, diagnosis]
-quality_rules:
-  - patient_id_present: patient_id ne doit pas etre vide
-  - age_valid: age entre 0 et 120
-  - mmse_range: mmse entre 0 et 30
-  - diagnosis_domain: diagnosis vaut 0 ou 1
-  - bp_coherent: diastolic_bp < systolic_bp
-  - cholesterol_plausible: cholesterol_total entre 100 et 400 (signalement seulement)
-  - duplicate_patient_id: patient_id unique (doublons rejetes et comptes)
 excluded_fields: [DoctorInCharge]
+
+thresholds:
+  max_reject_rate: 0.20      # au-dela, la publication est bloquee
+
+columns:                     # source = nom dans le CSV, name = nom dans curated
+  - {source: PatientID,        name: patient_id,        type: integer, required: true}
+  - {source: Age,              name: age,               type: integer, required: true}
+  - {source: Gender,           name: gender,            type: integer, required: true}
+  - {source: BMI,              name: bmi,               type: float,   required: true}
+  - {source: Hypertension,     name: hypertension,      type: integer, required: true}
+  - {source: SystolicBP,       name: systolic_bp,       type: integer, required: true}
+  - {source: DiastolicBP,      name: diastolic_bp,      type: integer, required: true}
+  - {source: CholesterolTotal, name: cholesterol_total, type: float,   required: true}
+  - {source: MMSE,             name: mmse,              type: float,   required: true}
+  - {source: MemoryComplaints, name: memory_complaints, type: integer, required: true}
+  - {source: Diagnosis,        name: diagnosis,         type: integer, required: true}
+
+quality_rules:
+  - {name: patient_id_present,    dimension: completeness, type: not_null,  column: patient_id, action: reject}
+  - {name: age_valid,             dimension: validity,     type: range,     column: age, min: 0, max: 120, action: reject}
+  - {name: mmse_range,            dimension: validity,     type: range,     column: mmse, min: 0, max: 30, action: reject}
+  - {name: diagnosis_domain,      dimension: validity,     type: domain,    column: diagnosis, values: [0, 1], action: reject}
+  - {name: bp_coherent,           dimension: consistency,  type: less_than, column: diastolic_bp, other: systolic_bp, action: reject}
+  - {name: cholesterol_plausible, dimension: validity,     type: range,     column: cholesterol_total, min: 100, max: 400, action: flag}
+  - {name: duplicate_patient_id,  dimension: uniqueness,   type: unique,   column: patient_id, action: reject}

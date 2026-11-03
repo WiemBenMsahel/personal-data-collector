@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import pandas as pd
 from collect import collect
+from contract import load_contract
 from validate import profile, validate, check_schema
 from transform import transform
 from publish import publish_db, log_run
@@ -12,10 +13,9 @@ REJECTED = Path("data/rejected/rejected_rows.csv")
 REPORT = Path("reports/run_report.json")
 RUNS_DIR = Path("reports/runs")
 LOG_FILE = Path("reports/pipeline.log")
-CONTRACT_VERSION = "1.0"
-MAX_REJECT_RATE = 0.20   # au-dela, la publication est bloquee
 
 log = logging.getLogger("pipeline")
+
 
 def setup_logging(run_id: str) -> None:
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -26,11 +26,13 @@ def setup_logging(run_id: str) -> None:
         force=True,
     )
 
+
 def write_report(report: dict) -> None:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     text = json.dumps(report, indent=2, ensure_ascii=False)
     REPORT.write_text(text, encoding="utf-8")
     (RUNS_DIR / f"run_{report['run_id']}.json").write_text(text, encoding="utf-8")
+
 
 def main(source: str) -> int:
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -40,21 +42,30 @@ def main(source: str) -> int:
         d.mkdir(parents=True, exist_ok=True)
 
     report = {"pipeline": "alzheimer-data-collector", "run_id": run_id,
-              "contract_version": CONTRACT_VERSION, "source_requested": source}
+              "source_requested": source}
     try:
         log.info("Debut du run, source demandee : %s", source)
+
+        # Le contrat pilote le schema, les regles et le seuil de rejet
+        contract = load_contract()
+        report["contract_version"] = contract["version"]
+        max_rate = contract["thresholds"]["max_reject_rate"]
+
         raw_path = collect(source)
         meta = json.loads(raw_path.with_suffix(".meta.json").read_text(encoding="utf-8"))
         collected = datetime.strptime(meta["collected_at"], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
         raw_age_h = round((datetime.now(timezone.utc) - collected).total_seconds() / 3600, 2)
         log.info("Raw : %s (age %s h, sha256 %s...)", raw_path.name, raw_age_h, meta["sha256"][:12])
 
-        df = pd.read_csv(raw_path)
-        check_schema(df)
+        try:
+            df = pd.read_csv(raw_path)
+        except pd.errors.EmptyDataError:
+            raise ValueError("Fichier vide : aucune ligne a traiter")
+        check_schema(df, contract)
         Path("reports/profile.json").write_text(
             json.dumps(profile(df), indent=2, default=str), encoding="utf-8")
 
-        accepted, rejected, stats = validate(df)
+        accepted, rejected, stats = validate(df, contract)
         rejected.to_csv(REJECTED, index=False)
         rate = len(rejected) / len(df)
         log.info("Validation : %d acceptees, %d rejetees (%.1f %%)", len(accepted), len(rejected), rate * 100)
@@ -62,8 +73,8 @@ def main(source: str) -> int:
             if n:
                 log.warning("Regle %s : %d echecs", rule, n)
 
-        if rate > MAX_REJECT_RATE:
-            raise RuntimeError(f"Taux de rejet {rate:.1%} > seuil {MAX_REJECT_RATE:.0%} : publication bloquee")
+        if rate > max_rate:
+            raise RuntimeError(f"Taux de rejet {rate:.1%} > seuil {max_rate:.0%} : publication bloquee")
 
         new = transform(accepted, raw_path.name)
         if CURATED.exists():   # UPSERT par cle metier
@@ -97,9 +108,10 @@ def main(source: str) -> int:
         log_run(report)
     except Exception as exc:
         log.error("Journal des runs en base impossible : %s", exc)
-        
+
     log.info("Fin du run : %s en %.2f s", report["status"], report["duration_seconds"])
     return code
+
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
