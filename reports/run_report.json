@@ -1,6 +1,6 @@
 {
   "pipeline": "alzheimer-data-collector",
-  "executed_at": "2026-11-03T11:35:36+00:00",
+  "executed_at": "2026-11-03T11:52:47+00:00",
   "source_file": "alzheimers_20261103T112421Z.csv",
   "input_rows": 2149,
   "accepted_rows": 1963,
@@ -17,5 +17,5 @@
     "cholesterol_plausible": 0
   },
   "quality_status": "PASS_WITH_WARNINGS",
-  "duration_seconds": 0.07
+  "duration_seconds": 0.1
 }

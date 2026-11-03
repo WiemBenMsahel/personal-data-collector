@@ -1,21 +1,21 @@
 {
   "pipeline": "alzheimer-data-collector",
-  "executed_at": "2026-11-03T11:35:36+00:00",
-  "source_file": "alzheimers_20261103T112421Z.csv",
-  "input_rows": 2149,
-  "accepted_rows": 1963,
-  "rejected_rows": 186,
-  "duplicates_removed": 0,
+  "executed_at": "2026-11-03T11:52:46+00:00",
+  "source_file": "alzheimers_20261103T113058Z.csv",
+  "input_rows": 2150,
+  "accepted_rows": 1961,
+  "rejected_rows": 189,
+  "duplicates_removed": 1,
   "curated_total_rows": 1963,
   "rule_failures": {
-    "duplicate_patient_id": 0,
+    "duplicate_patient_id": 1,
     "patient_id_present": 0,
-    "age_valid": 0,
-    "mmse_range": 0,
+    "age_valid": 1,
+    "mmse_range": 1,
     "diagnosis_domain": 0,
-    "bp_coherent": 186,
+    "bp_coherent": 187,
     "cholesterol_plausible": 0
   },
   "quality_status": "PASS_WITH_WARNINGS",
-  "duration_seconds": 0.07
+  "duration_seconds": 0.1
 }
