@@ -1,0 +1,105 @@
+{
+  "rows": 2149,
+  "columns": 35,
+  "dtypes": {
+    "PatientID": "int64",
+    "Age": "int64",
+    "Gender": "int64",
+    "Ethnicity": "int64",
+    "EducationLevel": "int64",
+    "BMI": "float64",
+    "Smoking": "int64",
+    "AlcoholConsumption": "float64",
+    "PhysicalActivity": "float64",
+    "DietQuality": "float64",
+    "SleepQuality": "float64",
+    "FamilyHistoryAlzheimers": "int64",
+    "CardiovascularDisease": "int64",
+    "Diabetes": "int64",
+    "Depression": "int64",
+    "HeadInjury": "int64",
+    "Hypertension": "int64",
+    "SystolicBP": "int64",
+    "DiastolicBP": "int64",
+    "CholesterolTotal": "float64",
+    "CholesterolLDL": "float64",
+    "CholesterolHDL": "float64",
+    "CholesterolTriglycerides": "float64",
+    "MMSE": "float64",
+    "FunctionalAssessment": "float64",
+    "MemoryComplaints": "int64",
+    "BehavioralProblems": "int64",
+    "ADL": "float64",
+    "Confusion": "int64",
+    "Disorientation": "int64",
+    "PersonalityChanges": "int64",
+    "DifficultyCompletingTasks": "int64",
+    "Forgetfulness": "int64",
+    "Diagnosis": "int64",
+    "DoctorInCharge": "str"
+  },
+  "missing_rate": {
+    "PatientID": 0.0,
+    "Age": 0.0,
+    "Gender": 0.0,
+    "Ethnicity": 0.0,
+    "EducationLevel": 0.0,
+    "BMI": 0.0,
+    "Smoking": 0.0,
+    "AlcoholConsumption": 0.0,
+    "PhysicalActivity": 0.0,
+    "DietQuality": 0.0,
+    "SleepQuality": 0.0,
+    "FamilyHistoryAlzheimers": 0.0,
+    "CardiovascularDisease": 0.0,
+    "Diabetes": 0.0,
+    "Depression": 0.0,
+    "HeadInjury": 0.0,
+    "Hypertension": 0.0,
+    "SystolicBP": 0.0,
+    "DiastolicBP": 0.0,
+    "CholesterolTotal": 0.0,
+    "CholesterolLDL": 0.0,
+    "CholesterolHDL": 0.0,
+    "CholesterolTriglycerides": 0.0,
+    "MMSE": 0.0,
+    "FunctionalAssessment": 0.0,
+    "MemoryComplaints": 0.0,
+    "BehavioralProblems": 0.0,
+    "ADL": 0.0,
+    "Confusion": 0.0,
+    "Disorientation": 0.0,
+    "PersonalityChanges": 0.0,
+    "DifficultyCompletingTasks": 0.0,
+    "Forgetfulness": 0.0,
+    "Diagnosis": 0.0,
+    "DoctorInCharge": 0.0
+  },
+  "duplicates": 0,
+  "min_max": {
+    "Age": [
+      60.0,
+      90.0
+    ],
+    "MMSE": [
+      0.005312146441700527,
+      29.991380560529063
+    ],
+    "SystolicBP": [
+      90.0,
+      179.0
+    ],
+    "DiastolicBP": [
+      60.0,
+      119.0
+    ],
+    "CholesterolTotal": [
+      150.09331559406317,
+      299.99335247432657
+    ]
+  },
+  "diagnosis_counts": {
+    "0": 1389,
+    "1": 760
+  }
+}

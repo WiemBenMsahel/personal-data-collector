@@ -1,0 +1,16 @@
+dataset: alzheimer_clinical_curated
+version: 1.0
+grain: une ligne represente un patient avec son bilan clinique et son diagnostic
+owner: Wiem Ben M'sahel
+source: Kaggle - Alzheimer's Disease Dataset (Rabie El Kharoua)
+business_key: patient_id
+required_fields: [patient_id, age, gender, systolic_bp, diastolic_bp, cholesterol_total, mmse, diagnosis]
+quality_rules:
+  - patient_id_present: patient_id ne doit pas etre vide
+  - age_valid: age entre 0 et 120
+  - mmse_range: mmse entre 0 et 30
+  - diagnosis_domain: diagnosis vaut 0 ou 1
+  - bp_coherent: diastolic_bp < systolic_bp
+  - cholesterol_plausible: cholesterol_total entre 100 et 400 (signalement seulement)
+  - duplicate_patient_id: patient_id unique (doublons rejetes et comptes)
+excluded_fields: [DoctorInCharge]
