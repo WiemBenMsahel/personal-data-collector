@@ -1,5 +1,5 @@
 dataset: alzheimer_clinical_curated
-version: "1.1"
+version: "1.2"
 owner: Wiem Ben M'sahel
 source: Kaggle - Alzheimer's Disease Dataset (Rabie El Kharoua)
 grain: une ligne represente un patient avec son bilan clinique et son diagnostic
@@ -8,6 +8,15 @@ excluded_fields: [DoctorInCharge]
 
 thresholds:
   max_reject_rate: 0.20      # au-dela, la publication est bloquee
+
+freshness:
+  source_update_frequency: never   # jeu fige (Kaggle : Expected update frequency = Never)
+  max_source_age_days: 30          # au-dela, avertissement (PASS_WITH_WARNINGS), pas de blocage
+
+retention:
+  raw_days: 90                     # copies raw horodatees (le plus recent est toujours conserve)
+  reports_days: 90                 # rapports JSON par run
+  keep_last_runs: 20               # on garde au moins les 20 derniers rapports
 
 columns:                     # source = nom dans le CSV, name = nom dans curated
   - {source: PatientID,        name: patient_id,        type: integer, required: true}

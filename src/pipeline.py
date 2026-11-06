@@ -46,16 +46,27 @@ def main(source: str) -> int:
     try:
         log.info("Debut du run, source demandee : %s", source)
 
-        # Le contrat pilote le schema, les regles et le seuil de rejet
+        # Le contrat pilote le schema, les regles, le seuil de rejet et la fraicheur
         contract = load_contract()
         report["contract_version"] = contract["version"]
         max_rate = contract["thresholds"]["max_reject_rate"]
+        max_age_days = contract.get("freshness", {}).get("max_source_age_days")
 
         raw_path = collect(source)
         meta = json.loads(raw_path.with_suffix(".meta.json").read_text(encoding="utf-8"))
         collected = datetime.strptime(meta["collected_at"], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
         raw_age_h = round((datetime.now(timezone.utc) - collected).total_seconds() / 3600, 2)
         log.info("Raw : %s (age %s h, sha256 %s...)", raw_path.name, raw_age_h, meta["sha256"][:12])
+
+        # Fraicheur : age du fichier source (date de derniere modification)
+        source_age_days = round((time.time() - Path(source).stat().st_mtime) / 86400, 2)
+        stale = max_age_days is not None and source_age_days > max_age_days
+        if stale:
+            log.warning("Fraicheur : fichier source age de %.1f jours (seuil %s jours)",
+                        source_age_days, max_age_days)
+        else:
+            log.info("Fraicheur : fichier source age de %.1f jours (seuil %s jours)",
+                     source_age_days, max_age_days)
 
         try:
             df = pd.read_csv(raw_path)
@@ -91,10 +102,11 @@ def main(source: str) -> int:
 
         report.update({
             "source_file": raw_path.name, "raw_age_hours": raw_age_h,
+            "source_age_days": source_age_days, "freshness": "STALE" if stale else "OK",
             "input_rows": len(df), "accepted_rows": len(accepted), "rejected_rows": len(rejected),
             "reject_rate": round(rate, 4), "duplicates_removed": stats["duplicate_patient_id"],
             "curated_total_rows": len(new), "rule_failures": stats,
-            "status": "PASS_WITH_WARNINGS" if (len(rejected) or stats.get("cholesterol_plausible")) else "PASS",
+            "status": "PASS_WITH_WARNINGS" if (len(rejected) or stats.get("cholesterol_plausible") or stale) else "PASS",
         })
         code = 0
     except Exception as exc:

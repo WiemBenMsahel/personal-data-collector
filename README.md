@@ -354,13 +354,14 @@ Pour l'incident MongoDB, la reprise a donné un run PASS avec 195 articles, puis
 
 Détail et preuves : [docs/incident_test.md](docs/incident_test.md).
 
-> **À compléter après l'étape fraîcheur :** contrôle de l'âge du fichier source et seuil d'alerte.
+> ### Fraîcheur
+
+Le contrat définit `freshness.max_source_age_days` (30 jours). À chaque run, le pipeline mesure l'âge du fichier source (`source_age_days`) : au-delà du seuil, il journalise un avertissement, le rapport indique `"freshness": "STALE"` et le statut passe en `PASS_WITH_WARNINGS`. Ce n'est pas bloquant : le jeu Kaggle est figé (mise à jour « Never »), l'alerte signale surtout une source qui n'a pas été rafraîchie. Simulation jouée le 06/11/2026 avec un fichier vieilli à 45 jours.
 
 ## 12. Gouvernance
 
 - **Responsable du dataset :** Wiem Ben M'sahel (auteure du projet).
-- **Rétention :** le raw (CSV et XML) et les rapports sont conservés pendant la durée du module et de la correction. Le curated, la base et MongoDB sont reconstructibles à tout moment depuis le raw.
-- **Données personnelles :** aucune (jeu synthétique, colonne `DoctorInCharge` exclue ; PubMed : métadonnées d'articles publiés uniquement).
+- **Rétention :** définie dans le contrat (`retention` : raw 90 jours, rapports 90 jours, au moins les 20 derniers rapports). `python src/purge.py` simule la purge (liste des fichiers à supprimer) et `python src/purge.py --apply` l'exécute. Le raw le plus récent et les échantillons ne sont jamais supprimés. Le curated, la base et MongoDB sont reconstructibles à tout moment depuis le raw.- **Données personnelles :** aucune (jeu synthétique, colonne `DoctorInCharge` exclue ; PubMed : métadonnées d'articles publiés uniquement).
 - **Secrets :** mots de passe et `MONGODB_URI` dans `.env` (non versionné), `.env.example` ne contient que des valeurs fictives.
 - **Accès :** le pipeline écrit dans PostgreSQL, Metabase lit seulement (les actions d'écriture de Metabase sont désactivées). Atlas n'accepte que l'adresse IP autorisée.
 - **Traçabilité :** chaque ligne de la table `patients` conserve `source_file` et `loaded_run_id` ; chaque article conserve `source_file` et `loaded_run_id`.
@@ -375,8 +376,8 @@ Détail et preuves : [docs/incident_test.md](docs/incident_test.md).
 - Les questions et le tableau de bord Metabase ne sont pas versionnés dans Git (une capture est fournie).
 - Metabase et PostgreSQL tournent avec une configuration locale simple, sans chiffrement ni gestion fine des droits.
 - Aucune alerte envoyée en cas d'incident : seuls les logs, le code de sortie et la table `runs` le signalent.
-- Pas de planification automatique, ni de purge des anciens rapports et fichiers raw.
-- La fraîcheur de la donnée n'est pas contrôlée : la source Kaggle est figée.
+- Pas de planification automatique : la purge se lance à la main (`purge.py --apply`).
+- La fraîcheur mesure l'âge du fichier source ; pour PubMed, aucun contrôle de fraîcheur n'est implémenté.
 
 ## 14. Choix et choix écartés
 
@@ -410,6 +411,7 @@ Comparaison détaillée des options : [docs/ADR_001.md](docs/ADR_001.md).
 | Docker et Docker Compose | Reproductibilité sur une autre machine |
 | Metabase en lecture seule sur les vues KPI | Interface limitée à un Streamlit minimal |
 | Seconde source PubMed (API) vers MongoDB Atlas, avec règles de qualité, rejets et UPSERT | Une seule source tabulaire, sans recoupement avec la littérature |
+| Contrôle de fraîcheur de la source et purge selon la rétention, pilotés par le contrat (v1.2) | Pas de contrôle de fraîcheur, fichiers qui s'accumulent |
 
 ### Restantes
 
