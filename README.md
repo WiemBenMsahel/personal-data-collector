@@ -20,7 +20,9 @@ Auteure : Wiem Ben M'sahel.
 | Cibler la population à étudier | Part de patients diagnostiqués par tranche d'âge |
 | Décider si le jeu est exploitable | Taux de lignes rejetées (table `runs`) |
 
-## 2. Source et conditions d'utilisation
+## 2. Sources et conditions d'utilisation
+
+### Source principale : patients (Kaggle)
 
 - Jeu de données : *Alzheimer's Disease Dataset*, par Rabie El Kharoua (Kaggle)
 - URL : https://www.kaggle.com/datasets/rabieelkharoua/alzheimers-disease-dataset
@@ -29,37 +31,56 @@ Auteure : Wiem Ben M'sahel.
 - Fréquence de mise à jour de la source : jamais (jeu figé)
 - Données synthétiques (tag « Synthetic » sur Kaggle) : aucune donnée personnelle de tiers. La colonne `DoctorInCharge` (masquée `XXXConfid`) est exclue de la zone curated.
 - Attribution : données de Rabie El Kharoua, licence CC BY 4.0, modifiées par ce projet (sélection de colonnes, renommage, rejet des lignes invalides, variables calculées).
-- Évaluation détaillée des sources : [docs/source_assessment.md](docs/source_assessment.md)
 
-> **À compléter après l'étape MongoDB :** seconde source (PubMed, API NCBI E-utilities), licence et conditions d'usage, date d'accès.
+### Seconde source : littérature scientifique (PubMed)
+
+- Source : PubMed, API NCBI E-utilities (`esearch` et `efetch`).
+- Documentation : https://www.ncbi.nlm.nih.gov/books/NBK25497/
+- Conditions d'usage : politique d'usage des données NCBI (https://www.ncbi.nlm.nih.gov/home/about/policies/). Seules les métadonnées (PMID, titre, revue, année, termes MeSH) sont conservées, pas le texte des résumés (minimisation et droits des éditeurs). Le script limite le débit des requêtes.
+- Date d'accès : 06/11/2026
+- Contenu : 50 articles récents par indicateur (MMSE, tension, cholestérol, âge) sur la maladie d'Alzheimer, soit 195 articles distincts (5 articles correspondent à deux indicateurs).
+- Rôle : situer les quatre indicateurs cliniques dans la littérature. Il n'y a pas de clé commune avec les patients : le recoupement se fait **par indicateur**, pas par patient.
+- Stockage : MongoDB Atlas (documents semi-structurés, clé métier `pmid`). Le curated est aussi exporté dans `data/curated/pubmed_articles.jsonl`.
+
+Évaluation détaillée des sources : [docs/source_assessment.md](docs/source_assessment.md)
 
 ## 3. Architecture
 
-![Architecture](docs/architecture.png)
+**Version 1 (cadrage initial) :** une source, un pipeline batch, un curated.
+
+![Architecture V1](docs/architecture_v1.png)
+
+**Version 2 (architecture finale) :** deux sources, deux modèles de stockage (relationnel et document), observabilité.
+
+![Architecture V2](docs/architecture_v2.png)
 
 ```
-Source (Kaggle) -> Collecteur -> RAW -> Validation -> Transformation -> CURATED (CSV)
-                                           |                               |
-                                           |                               +-> PostgreSQL (table patients)
-                                           |                                        |
-                                           |                                        +-> Vues KPI -> Metabase
-                                           +-> REJECTED (lignes invalides + cause)
-                                           +-> Rapport d'exécution (JSON + table runs)
+Kaggle CSV -> collect.py -> RAW -> Validation (contrat) -> Transformation -> CURATED (CSV)
+                                       |                                        |
+                                       +-> REJECTED                             +-> PostgreSQL (table patients)
+                                       +-> logs + rapports + table runs                 |
+                                                                                        +-> Vues KPI (gold) -> Metabase
+
+PubMed API -> pubmed.py -> RAW (XML) -> Validation -> CURATED (JSONL) -> MongoDB Atlas (articles, searches)
+                              |
+                              +-> REJECTED (JSONL)
 ```
 
-**Grain :** une ligne représente un patient (identifié par `PatientID`) avec son bilan clinique et son diagnostic.
-**Clé métier :** `patient_id`.
+**Grain :** une ligne représente un patient (identifié par `PatientID`) avec son bilan clinique et son diagnostic. Côté PubMed, un document représente un article (clé `pmid`).
+**Clé métier :** `patient_id` (patients), `pmid` (articles).
 **Contrat de données :** [config/data_contract.yaml](config/data_contract.yaml) (version 1.1)
+**Dictionnaire de données :** [docs/data_dictionary.md](docs/data_dictionary.md)
+**Décision d'architecture :** [docs/ADR_001.md](docs/ADR_001.md)
 
 ### Couches
 
 | Couche (nom courant) | Équivalent dans le projet | Rôle |
 |---|---|---|
-| Bronze (raw) | `data/raw/` | Copie brute horodatée de chaque fichier reçu, avec hash SHA-256 (rejouable) |
-| Silver (curated) | `data/curated/dataset.csv` et table `patients` | Données validées, typées, dédoublonnées |
+| Bronze (raw) | `data/raw/` | Copie brute horodatée de chaque fichier reçu (CSV avec hash SHA-256, XML PubMed), rejouable |
+| Silver (curated) | `data/curated/dataset.csv`, table `patients`, `pubmed_articles.jsonl`, collection `articles` | Données validées, typées, dédoublonnées |
 | Gold (mart) | Vues SQL `v_kpi_by_diagnosis` et `v_kpi_by_age_group` | Indicateurs prêts à interroger |
 
-Les lignes invalides sont conservées à part dans `data/rejected/rejected_rows.csv`.
+Les lignes invalides sont conservées à part (`data/rejected/`).
 
 ### Services (Docker Compose)
 
@@ -69,7 +90,7 @@ Les lignes invalides sont conservées à part dans `data/rejected/rejected_rows.
 | `metabase` | Tableau de bord (lecture des vues KPI et de la table `runs`) |
 | `pipeline` | Exécution du pipeline à la demande (`docker compose run`) |
 
-Le pipeline est le seul composant qui écrit dans la base. Metabase ne fait que lire.
+Le pipeline est le seul composant qui écrit dans la base. Metabase ne fait que lire. MongoDB Atlas est un service externe (offre gratuite M0), utilisé uniquement par `pubmed.py`.
 
 **Choix du backend :** si la variable `DATABASE_URL` est définie, le pipeline publie dans PostgreSQL. Sinon, il publie dans SQLite (`data/curated/alzheimer.db`), ce qui permet de lancer le pipeline et les tests sans Docker.
 
@@ -78,6 +99,7 @@ Le pipeline est le seul composant qui écrit dans la base. Metabase ne fait que 
 - Python 3.11 ou supérieur
 - Docker Desktop (pour PostgreSQL et Metabase)
 - Un compte Kaggle (gratuit) pour télécharger le fichier source
+- Optionnel : un cluster MongoDB Atlas gratuit pour la seconde source (voir section 6)
 
 ## 5. Installation
 
@@ -89,7 +111,7 @@ source .venv/bin/activate       # Linux / macOS
 pip install -r requirements.txt
 ```
 
-Configuration de l'environnement Docker :
+Configuration de l'environnement :
 
 ```bash
 cp .env.example .env            # Windows : Copy-Item .env.example .env
@@ -128,6 +150,17 @@ python src/analysis.py          # tableaux + graphique dans reports/
 streamlit run src/app.py        # tableau de bord de secours (lit SQLite)
 ```
 
+### Seconde source (PubMed et MongoDB Atlas)
+
+Renseigner `MONGODB_URI` et `NCBI_EMAIL` dans `.env` (cluster Atlas gratuit M0, adresse IP autorisée dans Network Access, utilisateur de base avec mot de passe alphanumérique). Sans `MONGODB_URI`, le script produit seulement le JSONL local : le pipeline principal (CSV vers PostgreSQL ou SQLite) ne dépend pas de MongoDB.
+
+```bash
+python src/pubmed.py          # collecte, validation, publication
+python src/pubmed.py --kpi    # compteurs depuis MongoDB
+```
+
+Un échantillon de raw est fourni : `data/raw/sample_pubmed.xml`.
+
 ### Tableau de bord Metabase
 
 1. Ouvrir http://localhost:3000 et créer le compte administrateur (local).
@@ -158,7 +191,7 @@ python src/pipeline.py --source data/source_download/dirty.csv
 ```
 personal-data-collector/
 ├── README.md
-├── requirements.txt             dépendances locales (pipeline, tests, Streamlit)
+├── requirements.txt             dépendances locales (pipeline, PubMed, tests, Streamlit)
 ├── requirements-docker.txt      dépendances de l'image du pipeline
 ├── Dockerfile                   image du pipeline
 ├── docker-compose.yml           postgres, metabase, pipeline
@@ -170,21 +203,29 @@ personal-data-collector/
 ├── config/
 │   └── data_contract.yaml       contrat de données v1.1 (colonnes, règles, seuil)
 ├── data/
-│   ├── raw/                     copies non modifiées de la source (horodatées + hash)
-│   │   └── sample_source.csv    échantillon de 150 lignes
+│   ├── raw/                     copies non modifiées des sources (horodatées)
+│   │   ├── sample_source.csv    échantillon de 150 lignes (Kaggle)
+│   │   └── sample_pubmed.xml    échantillon de 5 articles (PubMed)
 │   ├── curated/
-│   │   └── dataset.csv          données validées et transformées
-│   ├── rejected/rejected_rows.csv   lignes rejetées avec la cause
+│   │   ├── dataset.csv          patients validés et transformés
+│   │   └── pubmed_articles.jsonl    articles validés
+│   ├── rejected/
+│   │   ├── rejected_rows.csv    patients rejetés avec la cause
+│   │   └── pubmed_rejected.jsonl    articles rejetés avec la cause
 │   └── source_download/         fichiers téléchargés ou simulés (ignorés par Git)
 ├── docs/
-│   ├── architecture.png
+│   ├── architecture_v1.png      architecture initiale
+│   ├── architecture_v2.png      architecture finale
+│   ├── ADR_001.md               décision d'architecture
+│   ├── data_dictionary.md       dictionnaire de données
 │   ├── dashboard_metabase.png
-│   ├── incident_test.md         test d'incident et reprise
-│   └── source_assessment.md
+│   ├── atlas_collections.png    capture MongoDB Atlas
+│   ├── incident_test.md         incidents testés et reprise
+│   └── source_assessment.md     évaluation des sources
 ├── reports/
 │   ├── run_report.json          dernier rapport d'exécution
 │   ├── run_report_dirty_demo.json
-│   ├── runs/                    un rapport JSON par exécution
+│   ├── runs/                    un rapport JSON par exécution (CSV et PubMed)
 │   ├── profile.json             profilage initial
 │   └── mmse_by_diagnosis.png
 ├── src/
@@ -194,6 +235,7 @@ personal-data-collector/
 │   ├── transform.py             renommage, typage, variables calculées
 │   ├── publish.py               publication PostgreSQL ou SQLite (UPSERT), vues KPI, journal des runs
 │   ├── pipeline.py              orchestration, idempotence, rapport, gestion des incidents
+│   ├── pubmed.py                seconde source : PubMed vers MongoDB Atlas
 │   ├── analysis.py              statistiques par diagnostic
 │   └── app.py                   tableau de bord Streamlit (secours, SQLite)
 └── tests/
@@ -204,7 +246,9 @@ personal-data-collector/
 
 ## 8. Contrat de données et règles de qualité
 
-Le contrat `config/data_contract.yaml` est la **source de vérité** : colonnes attendues (nom source, nom curated, type), règles de qualité et seuil de rejet. Le code les lit au lieu de les dupliquer. Un test (`test_changing_contract_changes_behavior`) prouve qu'une modification du contrat change le comportement du pipeline.
+Le contrat `config/data_contract.yaml` est la **source de vérité** pour les patients : colonnes attendues (nom source, nom curated, type), règles de qualité et seuil de rejet. Le code les lit au lieu de les dupliquer. Un test (`test_changing_contract_changes_behavior`) prouve qu'une modification du contrat change le comportement du pipeline.
+
+### Patients (Kaggle)
 
 | Règle | Dimension | Condition | Action en cas d'échec |
 |---|---|---|---|
@@ -224,7 +268,21 @@ Contrôles bloquants au niveau du fichier :
 
 Chaque ligne rejetée est conservée dans `data/rejected/rejected_rows.csv` avec la colonne `reject_reason`. Le pipeline ne supprime jamais de lignes silencieusement.
 
-## 9. Résultats sur le jeu Kaggle
+### Articles PubMed
+
+| Règle | Dimension | Condition | Action en cas d'échec |
+|---|---|---|---|
+| `pmid_present` | Complétude | identifiant PubMed renseigné | Rejet |
+| `title_present` | Complétude | titre non vide | Rejet |
+| `year_valid` | Validité | année entre 1900 et l'année suivante | Rejet |
+| `duplicate_pmid` | Unicité | `pmid` unique | Rejet du doublon et comptage |
+| `abstract_present` | Complétude | résumé disponible | Signalement |
+
+Les rejets PubMed sont conservés dans `data/rejected/pubmed_rejected.jsonl`.
+
+## 9. Résultats
+
+### Patients (jeu Kaggle)
 
 | Indicateur | Valeur |
 |---|---|
@@ -232,8 +290,6 @@ Chaque ligne rejetée est conservée dans `data/rejected/rejected_rows.csv` avec
 | Lignes acceptées (curated) | 1963 |
 | Lignes rejetées | 186 (8,7 %), toutes par la règle `bp_coherent` |
 | Statut qualité | PASS_WITH_WARNINGS |
-
-### Analyse (KPI)
 
 Les KPI sont interrogeables en SQL (vues `v_kpi_by_diagnosis` et `v_kpi_by_age_group`) et affichés dans Metabase.
 
@@ -253,61 +309,81 @@ Sur ce jeu, le MMSE est l'indicateur qui diffère le plus entre les deux groupes
 
 Ces résultats concernent un jeu synthétique : ils illustrent le fonctionnement du pipeline et ne constituent pas des conclusions médicales.
 
+### Littérature (PubMed)
+
+Les articles situent les indicateurs dans la littérature. Chiffres au 06/11/2026 (`python src/pubmed.py --kpi`) :
+
+| Indicateur | Articles PubMed (total) | Articles stockés |
+|---|---|---|
+| MMSE | 6834 | 50 |
+| Tension artérielle | 1328 | 50 |
+| Cholestérol | 2303 | 50 |
+| Âge | 5209 | 50 |
+
+195 articles distincts sont stockés dans MongoDB (un article trouvé par deux indicateurs n'est stocké qu'une fois). Le volume d'articles est un indice de l'intérêt de la recherche pour chaque indicateur, pas une preuve de lien avec nos données.
+
 > **À compléter après l'étape ML :** modèle de classification (données, méthode, métriques, limites).
 
 ## 10. Idempotence
 
-- Le fichier source est identifié par son hash SHA-256 : un contenu déjà collecté n'est pas recopié dans `data/raw/` (le terminal affiche « Deja collecte »).
+- Le fichier source Kaggle est identifié par son hash SHA-256 : un contenu déjà collecté n'est pas recopié dans `data/raw/` (le terminal affiche « Deja collecte »).
 - Le curated CSV est mis à jour par UPSERT sur `patient_id`, avec écriture atomique (fichier temporaire puis remplacement).
 - La base (PostgreSQL ou SQLite) est mise à jour par UPSERT (`ON CONFLICT (patient_id) DO UPDATE`) dans une transaction unique : tout ou rien. La clé primaire `patient_id` garantit l'unicité.
 - Relancer le pipeline avec la même entrée laisse donc `curated_total_rows` et le nombre de patients en base inchangés (1963). Ce comportement est vérifié par `test_rerun_is_idempotent`.
+- Côté PubMed, l'UPSERT se fait sur `_id = pmid` : deux exécutions successives laissent 195 documents dans la collection `articles` (vérifié le 06/11/2026).
 
 ## 11. Observabilité, incidents et reprise
 
-Chaque exécution reçoit un `run_id` (horodatage UTC) présent dans les logs (`reports/pipeline.log`), dans le rapport `reports/runs/run_<run_id>.json` et dans la table `runs` de la base.
+Chaque exécution reçoit un `run_id` (horodatage UTC) présent dans les logs (`reports/pipeline.log`), dans le rapport `reports/runs/run_<run_id>.json` (ou `pubmed_<run_id>.json`) et, pour les patients, dans la table `runs` de la base.
 
 Le rapport contient : version du contrat, backend de base utilisé, lignes reçues, acceptées et rejetées, doublons, échecs par règle, âge du fichier raw, statut (`PASS`, `PASS_WITH_WARNINGS`, `FAIL`) et durée.
 
-### Incidents testés automatiquement (`tests/test_incidents.py`)
+### Incidents testés
 
-| Incident | Détection | Résultat attendu |
-|---|---|---|
-| Colonne manquante | `check_schema` | FAIL, code 1 |
-| Fichier vide | `check_schema` | FAIL, code 1 |
-| 100 % de lignes invalides | seuil de rejet du contrat | FAIL, publication bloquée |
-| Source introuvable | `collect` | FAIL, code 1 |
+| Incident | Pipeline | Détection | Résultat |
+|---|---|---|---|
+| Colonne manquante | patients | `check_schema` | FAIL, code 1 |
+| Fichier vide | patients | `check_schema` | FAIL, code 1 |
+| 100 % de lignes invalides | patients | seuil de rejet du contrat | FAIL, publication bloquée |
+| Source introuvable | patients | `collect` | FAIL, code 1 |
+| Publication MongoDB impossible (URI Atlas invalide), incident réel du 06/11/2026 | PubMed | `ConfigurationError` DNS | FAIL, code 1, raw et curated JSONL conservés, reprise après correction de `MONGODB_URI` |
 
-Dans chaque cas, le pipeline journalise une ligne `INCIDENT`, passe en FAIL, retourne le code de sortie 1, **ne modifie pas le curated** (hash SHA-256 identique avant et après) et **inscrit le FAIL dans la table `runs`**. La reprise consiste à relancer le pipeline sur le fichier valide : le run repasse en PASS_WITH_WARNINGS avec 1963 lignes (`test_recovery_after_incidents`).
+Les quatre premiers sont rejoués par `tests/test_incidents.py`. Dans chaque cas, le pipeline journalise une ligne `INCIDENT`, passe en FAIL, retourne le code de sortie 1, **ne modifie pas le curated** (hash SHA-256 identique avant et après) et **inscrit le FAIL dans la table `runs`**. La reprise consiste à relancer le pipeline sur le fichier valide : le run repasse en PASS_WITH_WARNINGS avec 1963 lignes (`test_recovery_after_incidents`).
 
-Démonstration manuelle possible avec `make_incidents.py`. Détail et preuves : [docs/incident_test.md](docs/incident_test.md).
+Pour l'incident MongoDB, la reprise a donné un run PASS avec 195 articles, puis 195 après une seconde exécution.
+
+Détail et preuves : [docs/incident_test.md](docs/incident_test.md).
 
 > **À compléter après l'étape fraîcheur :** contrôle de l'âge du fichier source et seuil d'alerte.
 
 ## 12. Gouvernance
 
 - **Responsable du dataset :** Wiem Ben M'sahel (auteure du projet).
-- **Rétention :** le raw et les rapports sont conservés pendant la durée du module et de la correction. Le curated et la base sont reconstructibles à tout moment depuis le raw.
-- **Données personnelles :** aucune (jeu synthétique, colonne `DoctorInCharge` exclue).
-- **Secrets :** mots de passe dans `.env` (non versionné), `.env.example` ne contient que des valeurs fictives.
-- **Accès :** le pipeline écrit dans PostgreSQL, Metabase lit seulement (les actions d'écriture de Metabase sont désactivées).
-- **Traçabilité :** chaque ligne de la table `patients` conserve `source_file` et `loaded_run_id`.
+- **Rétention :** le raw (CSV et XML) et les rapports sont conservés pendant la durée du module et de la correction. Le curated, la base et MongoDB sont reconstructibles à tout moment depuis le raw.
+- **Données personnelles :** aucune (jeu synthétique, colonne `DoctorInCharge` exclue ; PubMed : métadonnées d'articles publiés uniquement).
+- **Secrets :** mots de passe et `MONGODB_URI` dans `.env` (non versionné), `.env.example` ne contient que des valeurs fictives.
+- **Accès :** le pipeline écrit dans PostgreSQL, Metabase lit seulement (les actions d'écriture de Metabase sont désactivées). Atlas n'accepte que l'adresse IP autorisée.
+- **Traçabilité :** chaque ligne de la table `patients` conserve `source_file` et `loaded_run_id` ; chaque article conserve `source_file` et `loaded_run_id`.
 
 ## 13. Limites connues
 
-- Jeu synthétique : pas de valeur médicale.
+- Jeu patients synthétique : pas de valeur médicale.
 - Téléchargement Kaggle manuel (pas d'API automatisée).
 - Pas de lien patient-à-patient avec les images IRM, qui ne sont pas intégrées.
+- PubMed : seulement 50 articles récents par indicateur, sélectionnés par une requête simple (pas une revue systématique), métadonnées uniquement. Pas de clé commune avec les patients : recoupement par indicateur.
+- MongoDB Atlas dépend d'un compte externe : le correcteur doit créer son propre cluster ou se contenter du JSONL local. L'incident MongoDB n'est pas couvert par un test automatisé et `--kpi` affiche une trace brute si Atlas est injoignable.
 - Les questions et le tableau de bord Metabase ne sont pas versionnés dans Git (une capture est fournie).
 - Metabase et PostgreSQL tournent avec une configuration locale simple, sans chiffrement ni gestion fine des droits.
 - Aucune alerte envoyée en cas d'incident : seuls les logs, le code de sortie et la table `runs` le signalent.
 - Pas de planification automatique, ni de purge des anciens rapports et fichiers raw.
-- La fraîcheur de la donnée n'est pas contrôlée : la source est figée.
+- La fraîcheur de la donnée n'est pas contrôlée : la source Kaggle est figée.
 
 ## 14. Choix et choix écartés
 
 **Retenu**
 
 - **PostgreSQL** pour les données patients : tabulaires, schéma fixe, clé métier, KPI en SQL, accès multi-utilisateur et droits (Metabase en lecture, pipeline en écriture).
+- **MongoDB Atlas** pour la littérature PubMed : documents semi-structurés (nombre variable de termes MeSH, champs parfois absents), clé `pmid`, UPSERT idempotent. Rôle limité : situer les KPI dans la littérature, sans jointure patient.
 - **SQLite** conservé en secours : lancer les tests et le pipeline sans Docker.
 - **Docker Compose** : reproductibilité sur une autre machine en trois commandes.
 - **Metabase** : outil de BI réel plutôt qu'une interface codée à la main.
@@ -315,10 +391,11 @@ Démonstration manuelle possible avec `make_incidents.py`. Détail et preuves : 
 **Écartés**
 
 - **MongoDB pour les données patients** : elles sont tabulaires et à schéma fixe, donc aucun besoin de souplesse documentaire.
+- **PostgreSQL pour les articles** : possible avec une colonne JSON, mais moins naturel pour des documents à structure variable.
 - **Fichiers CSV seuls** : conservés pour le curated, mais sans contrainte de clé ni requêtes KPI en SQL.
-- **Streaming, orchestrateur (Airflow, etc.)** : une seule source figée, traitée à la demande.
+- **Streaming, orchestrateur (Airflow, etc.)** : sources peu volatiles, traitement à la demande.
 
-> **À compléter après l'étape MongoDB :** rôle de MongoDB Atlas pour la seconde source, et lien vers `docs/ADR_001.md`.
+Comparaison détaillée des options : [docs/ADR_001.md](docs/ADR_001.md).
 
 ## 15. Améliorations
 
@@ -332,6 +409,7 @@ Démonstration manuelle possible avec `make_incidents.py`. Détail et preuves : 
 | Publication dans PostgreSQL (clé primaire `patient_id`, UPSERT) avec SQLite en secours | Base monoutilisateur, sans droits d'accès |
 | Docker et Docker Compose | Reproductibilité sur une autre machine |
 | Metabase en lecture seule sur les vues KPI | Interface limitée à un Streamlit minimal |
+| Seconde source PubMed (API) vers MongoDB Atlas, avec règles de qualité, rejets et UPSERT | Une seule source tabulaire, sans recoupement avec la littérature |
 
 ### Restantes
 
@@ -339,6 +417,7 @@ Démonstration manuelle possible avec `make_incidents.py`. Détail et preuves : 
 |---|---|
 | Télécharger la source via l'API Kaggle (jeton en variable d'environnement) | Téléchargement manuel |
 | Automatiser l'exécution (GitHub Actions + `pytest`) | Pas de planification ni de contrôle automatique |
+| Tests automatisés de `pubmed.py` (parsing et validation sur un XML d'exemple) | Seconde source non couverte par pytest |
 | Alerter en cas d'échec (e-mail ou webhook) | Seuls les logs signalent un incident |
 | Exposer les KPI par une API (FastAPI) | Usage limité au tableau de bord |
 | Exporter le curated en Parquet | Échanges avec d'autres outils d'analyse |
@@ -350,6 +429,6 @@ Démonstration manuelle possible avec `make_incidents.py`. Détail et preuves : 
 ## 16. Usage d'outils d'IA
 
 - **Outil utilisé :** Claude (Anthropic).
-- **Tâches assistées :** structuration du projet, squelettes de code (`publish.py`, `app.py`, `make_incidents.py`), migration du contrat YAML, tests d'incident, configuration Docker Compose et Metabase, relecture de la documentation.
-- **Vérifications réalisées :** exécution du pipeline et des tests (13 tests), contrôle des KPI dans PostgreSQL contre `analysis.py`, test des quatre incidents avec code de sortie et comparaison du hash du curated avant et après, relance du pipeline pour vérifier l'idempotence (1963 lignes en base), contrôle que `.env` n'est pas versionné.
+- **Tâches assistées :** structuration du projet, squelettes de code (`publish.py`, `app.py`, `pubmed.py`, `make_incidents.py`), migration du contrat YAML, tests d'incident, configuration Docker Compose, Metabase et MongoDB Atlas, schémas d'architecture, relecture de la documentation.
+- **Vérifications réalisées :** exécution du pipeline et des tests (13 tests), contrôle des KPI dans PostgreSQL contre `analysis.py`, test des quatre incidents avec code de sortie et comparaison du hash du curated avant et après, relance du pipeline pour vérifier l'idempotence (1963 lignes en base), diagnostic et correction de l'erreur DNS de l'URI Atlas, exécution de `pubmed.py` deux fois (195 documents à chaque fois), contrôle que `.env` n'est pas versionné.
 - **Parties retravaillées personnellement :** [À COMPLÉTER PAR TOI avec ce que tu as réellement fait toi-même : choix du sujet et de la source, choix des règles de qualité et des seuils, lecture des KPI, décisions d'architecture, test sur environnement propre...]
