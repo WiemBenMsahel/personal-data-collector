@@ -1,0 +1,18 @@
+{
+  "pipeline": "pubmed-literature",
+  "run_id": "20261106T190037Z",
+  "status": "PASS",
+  "input_rows": 195,
+  "accepted_rows": 195,
+  "rejected_rows": 0,
+  "rule_failures": {
+    "pmid_present": 0,
+    "title_present": 0,
+    "year_valid": 0,
+    "duplicate_pmid": 0,
+    "abstract_present": 0
+  },
+  "mongo_documents": 195,
+  "source_file": "pubmed_20261106T190037Z.xml",
+  "duration_seconds": 7.58
+}
