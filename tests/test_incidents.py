@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import shutil
 import sqlite3
@@ -21,6 +22,7 @@ def env(tmp_path, monkeypatch):
     """Execute chaque test dans un dossier temporaire avec une copie du contrat."""
     shutil.copytree(ROOT / "config", tmp_path / "config")
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)   # les tests restent sur SQLite
     yield tmp_path
     for h in list(logging.root.handlers):   # libere le fichier de log (Windows)
         h.close()
@@ -32,7 +34,6 @@ def sha(path) -> str:
 
 
 def run(source) -> tuple[int, dict]:
-    import json
     code = main(str(source))
     report = json.loads(Path("reports/run_report.json").read_text(encoding="utf-8"))
     return code, report

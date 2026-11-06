@@ -6,7 +6,7 @@ from collect import collect
 from contract import load_contract
 from validate import profile, validate, check_schema
 from transform import transform
-from publish import publish_db, log_run
+from publish import publish_db, log_run, backend
 
 CURATED = Path("data/curated/dataset.csv")
 REJECTED = Path("data/rejected/rejected_rows.csv")
@@ -86,7 +86,8 @@ def main(source: str) -> int:
 
         n_db = publish_db(new, run_id)
         report["db_rows"] = n_db
-        log.info("Base SQLite mise a jour : %d patients", n_db)
+        report["db_backend"] = backend()
+        log.info("Base %s mise a jour : %d patients", backend(), n_db)
 
         report.update({
             "source_file": raw_path.name, "raw_age_hours": raw_age_h,

@@ -4,3 +4,4 @@ pytest
 matplotlib
 streamlit
 pyyaml
+psycopg[binary]
