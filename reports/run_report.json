@@ -1,13 +1,13 @@
 {
   "pipeline": "alzheimer-data-collector",
-  "run_id": "20261107T084809Z",
+  "run_id": "20261107T090026Z",
   "source_requested": "data/source_download/alzheimers_disease_data.csv",
   "contract_version": "1.2",
   "db_rows": 1963,
   "db_backend": "sqlite",
   "source_file": "alzheimers_20261103T112421Z.csv",
-  "raw_age_hours": 93.4,
-  "source_age_days": 3.9,
+  "raw_age_hours": 93.6,
+  "source_age_days": 3.91,
   "freshness": "OK",
   "input_rows": 2149,
   "accepted_rows": 1963,
@@ -25,5 +25,5 @@
     "duplicate_patient_id": 0
   },
   "status": "PASS_WITH_WARNINGS",
-  "duration_seconds": 0.91
+  "duration_seconds": 0.17
 }
