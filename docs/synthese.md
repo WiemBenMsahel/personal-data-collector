@@ -26,7 +26,6 @@
 |---|---|---|---|---|
 | Kaggle, *Alzheimer's Disease Dataset* (R. El Kharoua) | Patients (principale) | CSV, 2149 lignes, 35 colonnes | CC BY 4.0, jeu synthétique | Téléchargement manuel, 03/11/2026 |
 | PubMed (API NCBI E-utilities) | Littérature (seconde) | XML, 195 articles | Politique d'usage du NCBI, métadonnées seulement | API publique, 06/11/2026 |
-| OASIS (imagerie) | Écartée | NIfTI / JPEG | Accord d'utilisation | Accès sur demande, volumes hors proportion |
 
 Il n'existe aucune clé commune entre les patients et les articles : le recoupement se fait **par indicateur**, pas par patient.
 
