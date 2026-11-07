@@ -9,3 +9,5 @@ requests
 pymongo 
 python-dotenv
 scikit-learn
+yarrow
+python-dotenvpyarrow
