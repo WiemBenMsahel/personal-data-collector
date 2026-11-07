@@ -68,7 +68,7 @@ PubMed API -> pubmed.py -> RAW (XML) -> Validation -> CURATED (JSONL) -> MongoDB
 
 **Grain :** une ligne représente un patient (identifié par `PatientID`) avec son bilan clinique et son diagnostic. Côté PubMed, un document représente un article (clé `pmid`).
 **Clé métier :** `patient_id` (patients), `pmid` (articles).
-**Contrat de données :** [config/data_contract.yaml](config/data_contract.yaml) (version 1.1)
+**Contrat de données :** [config/data_contract.yaml](config/data_contract.yaml) (version 1.2)
 **Dictionnaire de données :** [docs/data_dictionary.md](docs/data_dictionary.md)
 **Décision d'architecture :** [docs/ADR_001.md](docs/ADR_001.md)
 
@@ -121,7 +121,16 @@ Puis éditer `.env` et remplacer `change_me` par un mot de passe de son choix (l
 
 ## 6. Exécution
 
-1. Télécharger `alzheimers_disease_data.csv` depuis Kaggle et le placer dans `data/source_download/`.
+### Démarrage rapide (sans Docker, sans MongoDB)
+
+```bash
+# 1. Télécharger alzheimers_disease_data.csv depuis Kaggle
+#    et le placer dans data/source_download/
+python src/pipeline.py          # collecte, validation, curated, base SQLite, rapport
+pytest -q                       # 14 tests
+```
+
+Résultat attendu : `PASS_WITH_WARNINGS`, 2149 lignes reçues, 1963 acceptées, 186 rejetées, 1963 patients en base. Le rapport est dans `reports/run_report.json`.
 
 ### Mode Docker (PostgreSQL + Metabase)
 
@@ -142,7 +151,7 @@ docker compose exec postgres psql -U alzheimer -d alzheimer -c "SELECT run_id, s
 
 Arrêter : `docker compose down` (conserve les données) ou `docker compose down -v` (supprime aussi les volumes, donc la base et la configuration de Metabase).
 
-### Mode local (SQLite, sans Docker)
+### Mode local (SQLite)
 
 ```bash
 python src/pipeline.py
@@ -186,6 +195,23 @@ python src/pipeline.py --source data/source_download/dirty.csv
 
 `make_dirty.py` injecte un MMSE hors plage, un âge impossible et un doublon de `PatientID`. Le rapport obtenu est conservé dans `reports/run_report_dirty_demo.json`. Il faut ensuite relancer le pipeline sur le fichier propre.
 
+### Démonstration de l'alerte de fraîcheur
+
+```powershell
+Copy-Item data\source_download\alzheimers_disease_data.csv data\source_download\incident_stale.csv
+(Get-Item data\source_download\incident_stale.csv).LastWriteTime = (Get-Date).AddDays(-45)
+python src/pipeline.py --source data/source_download/incident_stale.csv
+```
+
+Le pipeline journalise un avertissement de fraîcheur et le rapport indique `"freshness": "STALE"` (conservé dans `reports/run_report_stale_demo.json`). Il faut ensuite relancer le pipeline sur le fichier propre.
+
+### Purge selon la rétention
+
+```bash
+python src/purge.py             # simulation : liste ce qui serait supprimé
+python src/purge.py --apply     # suppression réelle
+```
+
 ## 7. Arborescence
 
 ```
@@ -201,7 +227,7 @@ personal-data-collector/
 ├── make_incidents.py            fichiers d'incident (démonstration manuelle)
 ├── explore.py                   exploration initiale du CSV
 ├── config/
-│   └── data_contract.yaml       contrat de données v1.1 (colonnes, règles, seuil)
+│   └── data_contract.yaml       contrat de données v1.2 (colonnes, règles, seuils, fraîcheur, rétention)
 ├── data/
 │   ├── raw/                     copies non modifiées des sources (horodatées)
 │   │   ├── sample_source.csv    échantillon de 150 lignes (Kaggle)
@@ -218,13 +244,14 @@ personal-data-collector/
 │   ├── architecture_v2.png      architecture finale
 │   ├── ADR_001.md               décision d'architecture
 │   ├── data_dictionary.md       dictionnaire de données
-│   ├── dashboard_metabase.png
+│   ├── dashboard_metabase.png   capture du tableau de bord
 │   ├── atlas_collections.png    capture MongoDB Atlas
 │   ├── incident_test.md         incidents testés et reprise
 │   └── source_assessment.md     évaluation des sources
 ├── reports/
 │   ├── run_report.json          dernier rapport d'exécution
-│   ├── run_report_dirty_demo.json
+│   ├── run_report_dirty_demo.json   rapport de la démo de rejets
+│   ├── run_report_stale_demo.json   rapport de la démo de fraîcheur
 │   ├── runs/                    un rapport JSON par exécution (CSV et PubMed)
 │   ├── profile.json             profilage initial
 │   └── mmse_by_diagnosis.png
@@ -234,19 +261,21 @@ personal-data-collector/
 │   ├── validate.py              profilage + règles du contrat + rejets
 │   ├── transform.py             renommage, typage, variables calculées
 │   ├── publish.py               publication PostgreSQL ou SQLite (UPSERT), vues KPI, journal des runs
-│   ├── pipeline.py              orchestration, idempotence, rapport, gestion des incidents
+│   ├── pipeline.py              orchestration, idempotence, fraîcheur, rapport, gestion des incidents
 │   ├── pubmed.py                seconde source : PubMed vers MongoDB Atlas
+│   ├── purge.py                 purge selon la rétention du contrat (simulation par défaut)
 │   ├── analysis.py              statistiques par diagnostic
 │   └── app.py                   tableau de bord Streamlit (secours, SQLite)
 └── tests/
     ├── test_quality.py          règles de qualité
     ├── test_contract.py         le contrat pilote le code
-    └── test_incidents.py        incidents automatisés, idempotence, reprise
+    ├── test_incidents.py        incidents automatisés, idempotence, reprise
+    └── test_retention.py        sélection des fichiers à purger
 ```
 
 ## 8. Contrat de données et règles de qualité
 
-Le contrat `config/data_contract.yaml` est la **source de vérité** pour les patients : colonnes attendues (nom source, nom curated, type), règles de qualité et seuil de rejet. Le code les lit au lieu de les dupliquer. Un test (`test_changing_contract_changes_behavior`) prouve qu'une modification du contrat change le comportement du pipeline.
+Le contrat `config/data_contract.yaml` est la **source de vérité** pour les patients : colonnes attendues (nom source, nom curated, type), règles de qualité, seuil de rejet, fraîcheur et rétention. Le code les lit au lieu de les dupliquer. Un test (`test_changing_contract_changes_behavior`) prouve qu'une modification du contrat change le comportement du pipeline.
 
 ### Patients (Kaggle)
 
@@ -260,11 +289,12 @@ Le contrat `config/data_contract.yaml` est la **source de vérité** pour les pa
 | `cholesterol_plausible` | Validité | cholestérol total entre 100 et 400 | Signalement |
 | `duplicate_patient_id` | Unicité | `PatientID` unique | Rejet du doublon et comptage |
 
-Contrôles bloquants au niveau du fichier :
+Contrôles au niveau du fichier :
 
 - **Fichier vide** : le run échoue (FAIL).
 - **Schéma** : colonne attendue manquante ou colonne numérique non numérique, le run échoue (FAIL).
 - **Taux de rejet** : au-delà de `thresholds.max_reject_rate` (20 %, défini dans le contrat), la publication est bloquée (FAIL).
+- **Fraîcheur** : fichier source plus ancien que `freshness.max_source_age_days` (30 jours), avertissement sans blocage (PASS_WITH_WARNINGS).
 
 Chaque ligne rejetée est conservée dans `data/rejected/rejected_rows.csv` avec la colonne `reject_reason`. Le pipeline ne supprime jamais de lignes silencieusement.
 
@@ -322,8 +352,6 @@ Les articles situent les indicateurs dans la littérature. Chiffres au 06/11/202
 
 195 articles distincts sont stockés dans MongoDB (un article trouvé par deux indicateurs n'est stocké qu'une fois). Le volume d'articles est un indice de l'intérêt de la recherche pour chaque indicateur, pas une preuve de lien avec nos données.
 
-> **À compléter après l'étape ML :** modèle de classification (données, méthode, métriques, limites).
-
 ## 10. Idempotence
 
 - Le fichier source Kaggle est identifié par son hash SHA-256 : un contenu déjà collecté n'est pas recopié dans `data/raw/` (le terminal affiche « Deja collecte »).
@@ -336,7 +364,7 @@ Les articles situent les indicateurs dans la littérature. Chiffres au 06/11/202
 
 Chaque exécution reçoit un `run_id` (horodatage UTC) présent dans les logs (`reports/pipeline.log`), dans le rapport `reports/runs/run_<run_id>.json` (ou `pubmed_<run_id>.json`) et, pour les patients, dans la table `runs` de la base.
 
-Le rapport contient : version du contrat, backend de base utilisé, lignes reçues, acceptées et rejetées, doublons, échecs par règle, âge du fichier raw, statut (`PASS`, `PASS_WITH_WARNINGS`, `FAIL`) et durée.
+Le rapport contient : version du contrat, backend de base utilisé, lignes reçues, acceptées et rejetées, doublons, échecs par règle, âge du fichier raw, âge du fichier source (`source_age_days`), fraîcheur (`freshness`), statut (`PASS`, `PASS_WITH_WARNINGS`, `FAIL`) et durée.
 
 ### Incidents testés
 
@@ -354,14 +382,15 @@ Pour l'incident MongoDB, la reprise a donné un run PASS avec 195 articles, puis
 
 Détail et preuves : [docs/incident_test.md](docs/incident_test.md).
 
-> ### Fraîcheur
+### Fraîcheur
 
-Le contrat définit `freshness.max_source_age_days` (30 jours). À chaque run, le pipeline mesure l'âge du fichier source (`source_age_days`) : au-delà du seuil, il journalise un avertissement, le rapport indique `"freshness": "STALE"` et le statut passe en `PASS_WITH_WARNINGS`. Ce n'est pas bloquant : le jeu Kaggle est figé (mise à jour « Never »), l'alerte signale surtout une source qui n'a pas été rafraîchie. Simulation jouée le 06/11/2026 avec un fichier vieilli à 45 jours.
+Le contrat définit `freshness.max_source_age_days` (30 jours). À chaque run, le pipeline mesure l'âge du fichier source (`source_age_days`) : au-delà du seuil, il journalise un avertissement, le rapport indique `"freshness": "STALE"` et le statut passe en `PASS_WITH_WARNINGS`. Ce n'est pas bloquant : le jeu Kaggle est figé (mise à jour « Never »), l'alerte signale surtout une source qui n'a pas été rafraîchie. Simulation jouée le 06/11/2026 avec un fichier vieilli à 45 jours (rapport : `reports/run_report_stale_demo.json`).
 
 ## 12. Gouvernance
 
 - **Responsable du dataset :** Wiem Ben M'sahel (auteure du projet).
-- **Rétention :** définie dans le contrat (`retention` : raw 90 jours, rapports 90 jours, au moins les 20 derniers rapports). `python src/purge.py` simule la purge (liste des fichiers à supprimer) et `python src/purge.py --apply` l'exécute. Le raw le plus récent et les échantillons ne sont jamais supprimés. Le curated, la base et MongoDB sont reconstructibles à tout moment depuis le raw.- **Données personnelles :** aucune (jeu synthétique, colonne `DoctorInCharge` exclue ; PubMed : métadonnées d'articles publiés uniquement).
+- **Rétention :** définie dans le contrat (`retention` : raw 90 jours, rapports 90 jours, au moins les 20 derniers rapports). `python src/purge.py` simule la purge (liste des fichiers à supprimer) et `python src/purge.py --apply` l'exécute. Le raw le plus récent et les échantillons ne sont jamais supprimés. Le curated, la base et MongoDB sont reconstructibles à tout moment depuis le raw.
+- **Données personnelles :** aucune (jeu synthétique, colonne `DoctorInCharge` exclue ; PubMed : métadonnées d'articles publiés uniquement).
 - **Secrets :** mots de passe et `MONGODB_URI` dans `.env` (non versionné), `.env.example` ne contient que des valeurs fictives.
 - **Accès :** le pipeline écrit dans PostgreSQL, Metabase lit seulement (les actions d'écriture de Metabase sont désactivées). Atlas n'accepte que l'adresse IP autorisée.
 - **Traçabilité :** chaque ligne de la table `patients` conserve `source_file` et `loaded_run_id` ; chaque article conserve `source_file` et `loaded_run_id`.
@@ -376,7 +405,7 @@ Le contrat définit `freshness.max_source_age_days` (30 jours). À chaque run, l
 - Les questions et le tableau de bord Metabase ne sont pas versionnés dans Git (une capture est fournie).
 - Metabase et PostgreSQL tournent avec une configuration locale simple, sans chiffrement ni gestion fine des droits.
 - Aucune alerte envoyée en cas d'incident : seuls les logs, le code de sortie et la table `runs` le signalent.
-- Pas de planification automatique : la purge se lance à la main (`purge.py --apply`).
+- Pas de planification automatique : la collecte et la purge se lancent à la main.
 - La fraîcheur mesure l'âge du fichier source ; pour PubMed, aucun contrôle de fraîcheur n'est implémenté.
 
 ## 14. Choix et choix écartés
@@ -411,12 +440,13 @@ Comparaison détaillée des options : [docs/ADR_001.md](docs/ADR_001.md).
 | Docker et Docker Compose | Reproductibilité sur une autre machine |
 | Metabase en lecture seule sur les vues KPI | Interface limitée à un Streamlit minimal |
 | Seconde source PubMed (API) vers MongoDB Atlas, avec règles de qualité, rejets et UPSERT | Une seule source tabulaire, sans recoupement avec la littérature |
-| Contrôle de fraîcheur de la source et purge selon la rétention, pilotés par le contrat (v1.2) | Pas de contrôle de fraîcheur, fichiers qui s'accumulent |
+| Contrôle de fraîcheur de la source et purge selon la rétention, pilotés par le contrat (v1.2), avec test automatisé de la purge | Pas de contrôle de fraîcheur, fichiers qui s'accumulent |
 
 ### Restantes
 
 | Amélioration | Limite traitée |
 |---|---|
+| Modèle de classification du diagnostic sur la couche silver (démonstration seulement : données synthétiques) | Exploitation des données au-delà des KPI |
 | Télécharger la source via l'API Kaggle (jeton en variable d'environnement) | Téléchargement manuel |
 | Automatiser l'exécution (GitHub Actions + `pytest`) | Pas de planification ni de contrôle automatique |
 | Tests automatisés de `pubmed.py` (parsing et validation sur un XML d'exemple) | Seconde source non couverte par pytest |
@@ -431,6 +461,6 @@ Comparaison détaillée des options : [docs/ADR_001.md](docs/ADR_001.md).
 ## 16. Usage d'outils d'IA
 
 - **Outil utilisé :** Claude (Anthropic).
-- **Tâches assistées :** structuration du projet, squelettes de code (`publish.py`, `app.py`, `pubmed.py`, `make_incidents.py`), migration du contrat YAML, tests d'incident, configuration Docker Compose, Metabase et MongoDB Atlas, schémas d'architecture, relecture de la documentation.
-- **Vérifications réalisées :** exécution du pipeline et des tests (13 tests), contrôle des KPI dans PostgreSQL contre `analysis.py`, test des quatre incidents avec code de sortie et comparaison du hash du curated avant et après, relance du pipeline pour vérifier l'idempotence (1963 lignes en base), diagnostic et correction de l'erreur DNS de l'URI Atlas, exécution de `pubmed.py` deux fois (195 documents à chaque fois), contrôle que `.env` n'est pas versionné.
-- **Parties retravaillées personnellement :** [À COMPLÉTER PAR TOI avec ce que tu as réellement fait toi-même : choix du sujet et de la source, choix des règles de qualité et des seuils, lecture des KPI, décisions d'architecture, test sur environnement propre...]
+- **Tâches assistées :** structuration du projet, squelettes de code (`publish.py`, `app.py`, `pubmed.py`, `purge.py`, `make_incidents.py`), migration du contrat YAML, tests d'incident et de rétention, configuration Docker Compose, Metabase et MongoDB Atlas, ADR, schémas d'architecture, relecture de la documentation.
+- **Vérifications réalisées :** exécution du pipeline et des 14 tests, contrôle des KPI dans PostgreSQL contre `analysis.py`, test des quatre incidents avec code de sortie et comparaison du hash du curated avant et après, relance du pipeline pour vérifier l'idempotence (1963 lignes en base), diagnostic et correction de l'erreur DNS de l'URI Atlas, exécution de `pubmed.py` deux fois (195 documents à chaque fois), simulation de fraîcheur (fichier vieilli à 45 jours) et purge en simulation, contrôle que `.env` n'est pas versionné.
+- **Parties retravaillées personnellement :** [À COMPLÉTER PAR TOI : 3 ou 4 phrases vraies, voir les questions dans le message]
