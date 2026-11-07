@@ -2,7 +2,7 @@
 
 **Synthèse du projet final**, module Architectures BD et collecte de données, ESEO 2026-2027
 **Auteure :** Wiem Ben M'sahel, 08/11/2026
-**Dépôt :** https://github.com/WiemBenMsahel/personal-data-collector
+**Dépôt Git (public) :** [https://github.com/WiemBenMsahel/personal-data-collector](https://github.com/WiemBenMsahel/personal-data-collector)
 
 ## 1. Problème, utilisateur, indicateurs et sources
 
@@ -34,9 +34,9 @@ Il n'existe aucune clé commune entre les patients et les articles : le recoupem
 
 ## 2. Pipeline et architecture
 
-<img src="architecture_v2.png" alt="Architecture V2" width="650">
+<img src="architecture_v2.png" alt="Architecture V2" width="600">
 
-**Chaîne patients.** Collecte reproductible, zone raw horodatée avec hash SHA-256, validation pilotée par le contrat de données, rejets conservés, transformation, zone curated (CSV), base PostgreSQL (SQLite en secours) par UPSERT, vues SQL d'indicateurs, tableau de bord Metabase. Un modèle de classification et un export Parquet lisent la couche curated.
+**Chaîne patients.** Collecte reproductible, zone raw horodatée avec hash SHA-256, validation pilotée par le contrat de données, rejets conservés, transformation, zone curated (CSV), base PostgreSQL (SQLite en secours) par UPSERT, vues SQL d'indicateurs, tableaux de bord Metabase et Streamlit. Un modèle de classification et un export Parquet lisent la couche curated.
 
 **Chaîne PubMed.** Recherche par indicateur (requêtes définies dans un contrat), raw XML horodaté, validation, curated JSONL, MongoDB Atlas (UPSERT sur `pmid`).
 
@@ -51,6 +51,8 @@ Il n'existe aucune clé commune entre les patients et les articles : le recoupem
 **Contrats de données.** `config/data_contract.yaml` (patients, version 1.2) et `config/pubmed_contract.yaml` (PubMed, version 1.0) sont les sources de vérité : colonnes, règles de qualité, seuils de rejet (20 %), fraîcheur, rétention. Le code les lit ; des tests prouvent que modifier un contrat change le comportement.
 
 **Orchestration.** Un DAG minimal en Python (`src/run_all.py`, bibliothèque standard) enchaîne 5 tâches : `patients` et `pubmed` (indépendantes), puis `export_parquet`, `model` et `purge_dry_run`. Une tâche ne démarre que si ses dépendances ont réussi ; en cas d'échec, ses descendantes sont marquées `UPSTREAM_FAILED` et les tâches indépendantes continuent. L'option `--resume` rejoue seulement ce qui n'avait pas réussi. Airflow n'est pas justifié : une machine, 5 tâches, aucune planification. Docker Compose fournit PostgreSQL et Metabase.
+
+**Extensions de démonstration (hors chaîne principale).** Une API REST en lecture seule (FastAPI) et une simulation de flux (contrôle qualité en continu avec fenêtre glissante). Elles ne sont pas nécessaires au projet : les sources sont figées et aucun consommateur autre que le tableau de bord n'existe. Elles sont isolées du pipeline, testées, et la décision d'architecture reste le batch.
 
 ## 3. Qualité, incidents et observabilité
 
@@ -70,6 +72,7 @@ Il n'existe aucune clé commune entre les patients et les articles : le recoupem
 | Panne de la source patients pendant le DAG | code de sortie de la tâche | `patients` en échec, 3 tâches `UPSTREAM_FAILED`, `pubmed` réussit ; reprise avec `--resume` |
 | MongoDB injoignable (incident réel, 06/11) | erreur DNS | FAIL ; raw et curated conservés ; reprise après correction |
 | Source trop ancienne (simulée, 45 jours) | fraîcheur | avertissement, statut PASS_WITH_WARNINGS |
+| Dérive dans le flux (MMSE impossible sur 200 événements) | fenêtre glissante, seuil 20 % | alerte, puis retour à la normale |
 
 Dans les cas bloquants, le curated n'est pas modifié (hash SHA-256 identique avant et après) et, pour les patients, l'échec est inscrit dans la table `runs`. Reprise : relancer le pipeline sur le fichier valide ou `run_all.py --resume`.
 
@@ -77,11 +80,13 @@ Dans les cas bloquants, le curated n'est pas modifié (hash SHA-256 identique av
 
 **Idempotence.** Relancer le pipeline ne duplique rien : 1963 patients en base après plusieurs exécutions, 195 articles dans MongoDB après plusieurs exécutions.
 
-**Tests et reproductibilité.** 30 tests automatisés (règles de qualité, contrat, incidents, rétention, PubMed, modèle, DAG, export Parquet). Rejeu sur un clone propre du dépôt le 07/11/2026 : pipeline, 30 tests, seconde source (sans MongoDB) et modèle fonctionnent en suivant le README.
+**Tests et reproductibilité.** 41 tests automatisés (règles de qualité, contrat, incidents, rétention, PubMed, modèle, DAG, export Parquet, API, flux). Rejeu complet sur un clone propre du dépôt avant la remise : pipeline, tests, seconde source (sans MongoDB) et modèle fonctionnent en suivant le README.
 
 ## 4. Résultat
 
-<img src="dashboard_metabase.png" alt="Tableau de bord Metabase" width="650">
+<img src="dashboard_streamlit.png" alt="Tableau de bord Streamlit" width="640">
+
+*Tableau de bord Streamlit (onglet Indicateurs) : 1 963 patients fiabilisés, MMSE moyen de 12,0 pour Alzheimer contre 16,2, 8,7 % de lignes rejetées lors du dernier run. Cinq onglets : indicateurs, qualité et incidents, littérature, modèle, pipeline.*
 
 **Qualité de la source.** 2149 lignes reçues, 1963 acceptées, 186 rejetées (8,7 %), toutes par la règle de cohérence de la tension.
 
@@ -110,9 +115,7 @@ Dans les cas bloquants, le curated n'est pas modifié (hash SHA-256 identique av
 
 195 articles distincts sont stockés (5 articles correspondent à deux indicateurs). Le volume d'articles indique l'intérêt de la recherche pour chaque indicateur ; ce n'est pas une preuve de lien avec nos données.
 
-<img src="atlas_collections.png" alt="Collections MongoDB Atlas" width="500">
-
-**Usage de la couche silver : modèle de classification.** Pour vérifier quels indicateurs portent un signal, deux modèles (régression logistique, forêt aléatoire) estiment le diagnostic à partir des 9 indicateurs cliniques du curated. Ils sont comparés à une baseline qui prédit toujours la classe majoritaire, évalués par validation croisée à 5 plis puis sur un jeu de test de 393 lignes. La graine est fixée (42), donc les chiffres sont reproductibles, et le rapport conserve le hash du curated lu.
+**Usage de la couche silver : modèle de classification.** Deux modèles (régression logistique, forêt aléatoire) estiment le diagnostic à partir des 9 indicateurs cliniques du curated. Ils sont comparés à une baseline qui prédit toujours la classe majoritaire, évalués par validation croisée à 5 plis puis sur un jeu de test de 393 lignes. La graine est fixée (42) et le rapport conserve le hash du curated lu.
 
 | Modèle | AUC (validation croisée) | AUC (test) | Rappel |
 |---|---|---|---|
@@ -120,19 +123,19 @@ Dans les cas bloquants, le curated n'est pas modifié (hash SHA-256 identique av
 | Régression logistique | 0,711 | 0,722 | 0,60 |
 | Forêt aléatoire | 0,715 | 0,757 | 0,48 |
 
-Le signal est réel mais modeste, et les deux modèles sont à égalité en validation croisée. L'accuracy est trompeuse (la baseline atteint 0,646 sans détecter aucun patient) : on retient l'AUC et le rappel. Par importance par permutation, le MMSE (baisse d'AUC de 0,16) et les plaintes de mémoire (0,11) portent presque tout le signal ; la tension, le cholestérol et l'âge n'apportent presque rien, ce qui confirme les KPI et ajoute les plaintes de mémoire comme indicateur à étudier. Le MMSE servant déjà à poser le diagnostic en pratique, son poids reflète surtout la génération des données. Données synthétiques : aucune valeur médicale.
+Le signal est réel mais modeste, et les deux modèles sont à égalité en validation croisée. L'accuracy est trompeuse (la baseline atteint 0,646 sans détecter aucun patient) : on retient l'AUC et le rappel. Par importance par permutation, le MMSE (baisse d'AUC de 0,16) et les plaintes de mémoire (0,11) portent presque tout le signal ; la tension, le cholestérol et l'âge n'apportent presque rien, ce qui confirme les KPI. Le MMSE servant déjà à poser le diagnostic en pratique, son poids reflète surtout la génération des données. Données synthétiques : aucune valeur médicale.
 
-**Mon travail sur le modèle.** J'ai comparé les modèles à une baseline, choisi les métriques adaptées au déséquilibre des classes, vérifié que la cible n'est pas dans les variables (`diagnosis_label` et `age_group` exclus) et contrôlé la reproductibilité (graine fixée, mêmes chiffres sur deux exécutions et sur le clone propre). Le modèle sert à tester quels indicateurs portent un signal, pas à prédire.
+**Simulation de flux (extension).** Le fichier est rejoué comme un flux d'événements, chacun contrôlé à l'arrivée. Sans dérive, le flux retrouve les volumes du batch (2149 événements, 1963 acceptés, 186 rejetés), ce qui prouve la cohérence des deux logiques. Avec une dérive injectée (200 événements corrompus), une alerte part peu après l'événement 600 puis le retour à la normale est signalé : le batch, lui, ne détecterait la panne qu'à la fin du fichier.
 
-**Consultation.** Tableau de bord Metabase (http://localhost:3000, lecture des vues KPI et de la table `runs`), requêtes SQL sur les vues, tableau de bord Streamlit de secours, rapport du modèle (`reports/model_report.json`), export Parquet (`data/curated/dataset.parquet`).
+**Consultation.** Tableaux de bord Metabase (http://localhost:3000, vues KPI et table `runs`) et Streamlit (`streamlit run src/app2.py`), API en lecture seule (http://localhost:8000/docs), requêtes SQL sur les vues, rapport du modèle (`reports/model_report.json`), export Parquet.
 
 ## 5. Décisions, limites et perspectives
 
-**Décision d'architecture (ADR 001).** Options comparées : fichiers seuls, PostgreSQL seul (articles en JSONB), PostgreSQL + MongoDB Atlas, MongoDB seul. Option retenue : PostgreSQL pour les patients (données tabulaires, schéma fixe, clé primaire, vues KPI) et MongoDB Atlas pour les articles (documents semi-structurés, clé `pmid`). Architecture batch, raw en fichiers, DAG minimal en Python plutôt qu'Airflow. Pour le modèle, des algorithmes simples et interprétables (scikit-learn) suffisent à une démonstration sur 1963 lignes.
+**Décision d'architecture (ADR 001).** Options comparées : fichiers seuls, PostgreSQL seul (articles en JSONB), PostgreSQL + MongoDB Atlas, MongoDB seul. Option retenue : PostgreSQL pour les patients (données tabulaires, schéma fixe, clé primaire, vues KPI) et MongoDB Atlas pour les articles (documents semi-structurés, clé `pmid`). Architecture batch, raw en fichiers, DAG minimal en Python plutôt qu'Airflow. L'API et la simulation de flux sont des extensions assumées comme non nécessaires. Pour le modèle, des algorithmes simples et interprétables suffisent à une démonstration sur 1963 lignes.
 
-**Compromis assumés.** Deux systèmes de stockage pour de petits volumes. PostgreSQL avec une colonne JSONB aurait suffi techniquement pour 195 articles ; MongoDB a été retenu sur la recommandation de l'enseignant, avec un rôle volontairement limité. Condition de réexamen : revenir à PostgreSQL seul si la littérature reste de quelques centaines d'articles sans besoin de recherche textuelle. Le DAG n'a ni interface ni planification ; condition de réexamen : passer à Airflow ou Prefect si les sources deviennent périodiques.
+**Compromis assumés.** Deux systèmes de stockage pour de petits volumes : PostgreSQL avec une colonne JSONB aurait suffi techniquement pour 195 articles, MongoDB a été retenu sur la recommandation de l'enseignant avec un rôle limité (réexamen : revenir à PostgreSQL seul si la littérature reste de quelques centaines d'articles). Le DAG n'a ni interface ni planification (réexamen : Airflow ou Prefect si les sources deviennent périodiques). L'API n'a pas d'authentification (réexamen : avant toute exposition hors de la machine locale).
 
-**Choix écartés.** API (aucun consommateur : Metabase et les vues SQL servent déjà d'interface), streaming (sources peu volatiles), images IRM (pas de lien patient-à-patient).
+**Choix écartés.** Streaming comme mode de traitement principal (sources peu volatiles), images IRM (pas de lien patient-à-patient), modèles complexes (aucun besoin démontré).
 
 **Gouvernance.** Responsable : l'auteure. Rétention : raw et rapports 90 jours (purge simulée par défaut). Aucune donnée personnelle. Traçabilité : `source_file` et `loaded_run_id` conservés sur chaque ligne ou document, lignage décrit dans `docs/lineage.md`.
 
@@ -144,8 +147,16 @@ Le signal est réel mais modeste, et les deux modèles sont à égalité en vali
 - PubMed : 50 articles récents par indicateur, requête simple, pas de revue systématique ; pas de clé commune avec les patients ; seuil de fraîcheur simple.
 - MongoDB Atlas dépend d'un compte externe (mode dégradé : JSONL local) ; l'incident MongoDB n'est pas couvert par un test automatisé.
 - Modèle : démonstration seulement (9 indicateurs, un seul découpage train/test, pas de réglage des hyperparamètres).
+- API sans authentification, flux simulé à partir d'une source figée.
 - Aucune alerte envoyée, pas de planification automatique.
 
-**Perspectives.** Téléchargement par l'API Kaggle, exécution automatisée (GitHub Actions + tests), alertes en cas d'échec, test automatisé de l'incident MongoDB, réentraînement du modèle avec davantage d'indicateurs du jeu source, migration du DAG vers Airflow si une planification devient nécessaire, intégration d'images IRM avec stockage objet.
+**Perspectives.** Téléchargement par l'API Kaggle, exécution automatisée (GitHub Actions + tests), alertes en cas d'échec, test automatisé de l'incident MongoDB, réentraînement du modèle avec davantage d'indicateurs du jeu source, authentification de l'API, migration du DAG vers Airflow si une planification devient nécessaire, intégration d'images IRM avec stockage objet.
 
 **Usage d'outils d'IA.** Claude (Anthropic) a assisté la structuration, des squelettes de code, la documentation et la relecture ; le code a été exécuté, testé et vérifié (voir la section 16 du README pour le détail et les parties retravaillées personnellement).
+
+## Liens
+
+- Dépôt Git (public) : [https://github.com/WiemBenMsahel/personal-data-collector](https://github.com/WiemBenMsahel/personal-data-collector)
+- README (installation et exécution) : [https://github.com/WiemBenMsahel/personal-data-collector/blob/main/README.md](https://github.com/WiemBenMsahel/personal-data-collector/blob/main/README.md)
+- Décision d'architecture (ADR 001) : [https://github.com/WiemBenMsahel/personal-data-collector/blob/main/docs/ADR_001.md](https://github.com/WiemBenMsahel/personal-data-collector/blob/main/docs/ADR_001.md)
+- Version remise (tag `rendu-2026-11-08`) : [https://github.com/WiemBenMsahel/personal-data-collector/tree/rendu-2026-11-08](https://github.com/WiemBenMsahel/personal-data-collector/tree/rendu-2026-11-08)

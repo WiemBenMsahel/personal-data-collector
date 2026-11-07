@@ -9,3 +9,6 @@ pymongo
 python-dotenv
 scikit-learn
 pyarrow
+fastapi
+uvicorn 
+httpx

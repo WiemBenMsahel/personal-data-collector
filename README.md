@@ -3,6 +3,7 @@
 Projet final du module **Architectures BD et collecte de données**, ESEO 2026-2027
 (prolongement du projet personnel des TP des séances 1 à 3).
 Auteure : Wiem Ben M'sahel.
+Dépôt : https://github.com/WiemBenMsahel/personal-data-collector
 Synthèse du projet : [docs/synthese.pdf](docs/synthese.pdf) (version source : [docs/synthese.md](docs/synthese.md)).
 
 ## 1. Objectif de l'application
@@ -71,6 +72,10 @@ PubMed API -> pubmed.py -> RAW (XML) -> Validation (contrat) -> CURATED (JSONL) 
                               +-> REJECTED (JSONL)
 
 run_all.py : DAG de 5 tâches (patients, pubmed, export_parquet, model, purge_dry_run), reprise avec --resume
+
+Extensions de démonstration (hors chaîne principale, lecture seule) :
+  base + rapports + curated PubMed -> api.py (FastAPI)  et  app2.py (Streamlit, 5 onglets)
+  source Kaggle rejouée comme un flux -> stream_demo.py (contrôle qualité en continu, alertes)
 ```
 
 **Grain :** une ligne représente un patient (identifié par `PatientID`) avec son bilan clinique et son diagnostic. Côté PubMed, un document représente un article (clé `pmid`).
@@ -98,9 +103,9 @@ Les lignes invalides sont conservées à part (`data/rejected/`). Le modèle de 
 | `metabase` | Tableau de bord (lecture des vues KPI et de la table `runs`) |
 | `pipeline` | Exécution du pipeline à la demande (`docker compose run`) |
 
-Le pipeline est le seul composant qui écrit dans la base. Metabase ne fait que lire. MongoDB Atlas est un service externe (offre gratuite M0), utilisé uniquement par `pubmed.py`.
+Le pipeline est le seul composant qui écrit dans la base. Metabase, l'API et le tableau de bord Streamlit ne font que lire. MongoDB Atlas est un service externe (offre gratuite M0), utilisé uniquement par `pubmed.py`.
 
-**Choix du backend :** si la variable `DATABASE_URL` est définie, le pipeline publie dans PostgreSQL. Sinon, il publie dans SQLite (`data/curated/alzheimer.db`), ce qui permet de lancer le pipeline et les tests sans Docker.
+**Choix du backend :** si la variable `DATABASE_URL` est définie, le pipeline publie dans PostgreSQL. Sinon, il publie dans SQLite (`data/curated/alzheimer.db`), ce qui permet de lancer le pipeline et les tests sans Docker. L'API et le tableau de bord Streamlit (`src/dbaccess.py`) suivent la même règle en lecture seule.
 
 ## 4. Prérequis
 
@@ -135,7 +140,8 @@ Puis éditer `.env` et remplacer `change_me` par un mot de passe de son choix (l
 # 1. Télécharger alzheimers_disease_data.csv depuis Kaggle
 #    et le placer dans data/source_download/
 python src/pipeline.py          # collecte, validation, curated, base SQLite, rapport
-pytest -q                       # 30 tests
+pytest -q                       # 41 tests
+streamlit run src/app2.py       # tableau de bord (optionnel)
 ```
 
 Résultat attendu : `PASS_WITH_WARNINGS`, 2149 lignes reçues, 1963 acceptées, 186 rejetées, 1963 patients en base. Le rapport est dans `reports/run_report.json`.
@@ -186,8 +192,48 @@ Arrêter : `docker compose down` (conserve les données) ou `docker compose down
 ```bash
 python src/pipeline.py
 python src/analysis.py          # tableaux + graphique dans reports/
-streamlit run src/app.py        # tableau de bord de secours (lit SQLite)
+streamlit run src/app2.py       # tableau de bord complet (lit SQLite)
+streamlit run src/app.py        # tableau de bord minimal de secours
 ```
+
+### Tableau de bord Streamlit (5 onglets)
+
+```bash
+streamlit run src/app2.py
+```
+
+Lecture seule. Base : SQLite par défaut, PostgreSQL si la variable `DATABASE_URL` est définie (le port de PostgreSQL doit alors être accessible depuis la machine). Onglets :
+
+- **Indicateurs** : histogramme du MMSE par diagnostic, part diagnostiquée par tranche d'âge, écart standardisé entre les groupes pour chaque indicateur, filtres (âge, diagnostic, genre).
+- **Qualité et incidents** : taux de rejet par exécution avec le seuil de 20 %, échecs par règle, journal coloré, incidents détectés.
+- **Littérature** : articles PubMed par indicateur et par année, termes MeSH, recherche dans les titres.
+- **Modèle** : comparaison des modèles et importance des indicateurs (lit `reports/model_report.json`).
+- **Pipeline** : graphe du DAG coloré selon le statut, simulation de flux, architecture V2.
+
+Si un fichier dont dépend un onglet manque (rapport du modèle, DAG, PubMed), l'onglet affiche la commande à lancer au lieu de planter. Les données sont mises en cache 60 secondes.
+
+![Tableau de bord Streamlit](docs/dashboard_streamlit.png)
+
+### API REST en lecture seule (extension)
+
+```bash
+python -m uvicorn --app-dir src api:app --port 8000
+```
+
+Documentation interactive (Swagger) : http://localhost:8000/docs. Routes : `/health`, `/kpi/diagnosis`, `/kpi/age-groups`, `/patients` (filtres `diagnosis`, `min_age`, `max_age`, pagination), `/patients/{id}`, `/runs`, `/quality/summary`, `/literature/summary`.
+
+L'API ne contient aucune route d'écriture, valide ses paramètres et utilise des requêtes paramétrées (une tentative d'injection SQL est testée). Elle n'a pas d'authentification : usage local uniquement. C'est une extension de démonstration : aucun consommateur autre que le tableau de bord n'existe (voir ADR 001).
+
+### Simulation de flux (extension, preuve de concept)
+
+```bash
+python src/stream_demo.py --rate 0                       # vitesse maximale, sans dérive
+python src/stream_demo.py --rate 300 --inject-drift      # 300 événements/s, dérive simulée
+```
+
+Les sources étant figées, le fichier Kaggle est rejoué comme un flux : un événement = un patient, un producteur dans un fil séparé alimente une file d'attente. Chaque événement est contrôlé à l'arrivée avec les règles du contrat patients ; une alerte part si le taux de rejet sur une fenêtre glissante de 100 événements dépasse 20 %, et un message signale le retour à la normale. L'option `--inject-drift` corrompt les événements 600 à 799 (MMSE impossible). Rapport : `reports/stream_report.json` ; trace de la démonstration de dérive : `reports/stream_report_drift_demo.json`.
+
+La simulation ne remplace pas le pipeline batch, qui reste la seule chaîne qui alimente la base. Elle montre ce qu'un traitement en continu ajouterait (détection précoce d'une dérive) sans changer la décision d'architecture.
 
 ### Seconde source (PubMed et MongoDB Atlas)
 
@@ -230,7 +276,7 @@ Contenu du tableau de bord : nombre de patients, MMSE moyen par diagnostic, part
 pytest -q
 ```
 
-30 tests. Ils tournent sur SQLite, dans un dossier temporaire : ils ne modifient ni le curated, ni le raw, ni la base. Ils couvrent les règles de qualité, le contrat, les incidents, la rétention, PubMed (analyse, validation, contrat, seuil, fraîcheur, incident), le modèle, le DAG et l'export Parquet.
+41 tests. Ils tournent sur SQLite, dans un dossier temporaire : ils ne modifient ni le curated, ni le raw, ni la base. Ils couvrent les règles de qualité, le contrat, les incidents, la rétention, PubMed (analyse, validation, contrat, seuil, fraîcheur, incident), le modèle, le DAG, l'export Parquet, l'API (KPI, filtres et pagination, injection SQL, lecture seule, base indisponible) et le flux (chaque règle, doublons, alerte puis retour à la normale, cohérence avec la logique batch).
 
 ### Démonstration d'une donnée invalide
 
@@ -263,7 +309,7 @@ python src/purge.py --apply     # suppression réelle
 ```
 personal-data-collector/
 ├── README.md
-├── requirements.txt             dépendances locales (pipeline, PubMed, modèle, Parquet, tests, Streamlit)
+├── requirements.txt             dépendances locales (pipeline, PubMed, modèle, Parquet, API, Streamlit, tests)
 ├── requirements-docker.txt      dépendances de l'image du pipeline
 ├── Dockerfile                   image du pipeline
 ├── docker-compose.yml           postgres, metabase, pipeline
@@ -295,7 +341,8 @@ personal-data-collector/
 │   ├── ADR_001.md               décision d'architecture
 │   ├── data_dictionary.md       dictionnaire de données
 │   ├── lineage.md               lignage des données
-│   ├── dashboard_metabase.png   capture du tableau de bord
+│   ├── dashboard_metabase.png   capture du tableau de bord Metabase
+│   ├── dashboard_streamlit.png  capture du tableau de bord Streamlit
 │   ├── atlas_collections.png    capture MongoDB Atlas
 │   ├── incident_test.md         incidents testés et reprise
 │   └── source_assessment.md     évaluation des sources
@@ -305,6 +352,8 @@ personal-data-collector/
 │   ├── run_report_stale_demo.json   rapport de la démo de fraîcheur
 │   ├── dag_last_run.json        état du dernier run du DAG
 │   ├── dag_demo_failure.json    preuve : panne de la source et tâches en UPSTREAM_FAILED
+│   ├── stream_report.json       rapport de la simulation de flux (sans dérive)
+│   ├── stream_report_drift_demo.json   rapport de la simulation avec dérive injectée
 │   ├── model_report.json        rapport du modèle de classification
 │   ├── runs/                    un rapport JSON par exécution (CSV et PubMed)
 │   ├── profile.json             profilage initial
@@ -321,8 +370,12 @@ personal-data-collector/
 │   ├── export_parquet.py        export du curated en Parquet
 │   ├── purge.py                 purge selon la rétention du contrat (simulation par défaut)
 │   ├── run_all.py               DAG de 5 tâches avec reprise (--resume)
+│   ├── dbaccess.py              accès en lecture seule à la base (PostgreSQL ou SQLite), partagé par l'API et Streamlit
+│   ├── api.py                   API REST en lecture seule (FastAPI), extension
+│   ├── stream_demo.py           simulation de flux : contrôle qualité en continu, extension
 │   ├── analysis.py              statistiques par diagnostic
-│   └── app.py                   tableau de bord Streamlit (secours, SQLite)
+│   ├── app2.py                  tableau de bord Streamlit complet (5 onglets)
+│   └── app.py                   tableau de bord Streamlit minimal de secours
 └── tests/
     ├── test_quality.py          règles de qualité
     ├── test_contract.py         le contrat pilote le code
@@ -331,7 +384,9 @@ personal-data-collector/
     ├── test_pubmed.py           PubMed : analyse, validation, contrat, seuil, fraîcheur, incident
     ├── test_model.py            modèle : pas de fuite de la cible, supérieur à la baseline
     ├── test_dag.py              DAG : dépendances, propagation des échecs, reprise
-    └── test_parquet.py          export Parquet : lignes et valeurs conservées
+    ├── test_parquet.py          export Parquet : lignes et valeurs conservées
+    ├── test_api.py              API : KPI, filtres, injection SQL, lecture seule, base indisponible
+    └── test_stream.py           flux : règles, doublons, alerte et retour à la normale, cohérence avec le batch
 ```
 
 ## 8. Contrats de données et règles de qualité
@@ -376,6 +431,10 @@ Contrôles au niveau du lot, définis dans le contrat :
 
 Les rejets PubMed sont conservés dans `data/rejected/pubmed_rejected.jsonl`.
 
+### Contrôle en continu (extension)
+
+La simulation de flux applique les règles du contrat patients à chaque événement et déclenche une alerte lorsque le taux de rejet d'une fenêtre glissante de 100 événements dépasse 20 % (même seuil que le contrat).
+
 ## 9. Résultats
 
 ### Patients (jeu Kaggle)
@@ -387,7 +446,7 @@ Les rejets PubMed sont conservés dans `data/rejected/pubmed_rejected.jsonl`.
 | Lignes rejetées | 186 (8,7 %), toutes par la règle `bp_coherent` |
 | Statut qualité | PASS_WITH_WARNINGS |
 
-Les KPI sont interrogeables en SQL (vues `v_kpi_by_diagnosis` et `v_kpi_by_age_group`) et affichés dans Metabase.
+Les KPI sont interrogeables en SQL (vues `v_kpi_by_diagnosis` et `v_kpi_by_age_group`), par l'API et affichés dans Metabase et Streamlit.
 
 | Diagnostic | Patients | MMSE moyen | Tension systolique | Cholestérol total | Âge moyen |
 |---|---|---|---|---|---|
@@ -436,6 +495,16 @@ Lecture des résultats :
 
 Limites : jeu synthétique ; seulement 9 indicateurs dans le curated (les autres colonnes de la source ne sont pas retenues par le contrat) ; un seul découpage train/test de 393 lignes ; pas de réglage des hyperparamètres ; l'importance par permutation ne prouve aucun lien causal. Dans la pratique clinique, le MMSE sert déjà à poser le diagnostic : son poids sur ce jeu reflète surtout la façon dont les données ont été générées. Aucune valeur médicale.
 
+### Simulation de flux (extension)
+
+Sans dérive, le flux retrouve exactement les volumes du batch, ce qui montre que les deux logiques sont cohérentes :
+
+| Scénario | Événements | Acceptés | Rejetés | Règle en échec | Alertes |
+|---|---|---|---|---|---|
+| Sans dérive | 2149 | 1963 | 186 (8,7 %) | `bp_coherent` | 0 |
+
+Avec dérive injectée (événements 600 à 799 corrompus, MMSE impossible), une alerte est levée peu après l'événement 600, puis un retour à la normale est signalé après l'événement 800 ; la règle `mmse_range` échoue sur 200 événements. Le batch, lui, ne détecterait cette panne qu'à la fin du fichier (seuil de rejet global). Trace : `reports/stream_report_drift_demo.json`.
+
 ## 10. Idempotence
 
 - Le fichier source Kaggle est identifié par son hash SHA-256 : un contenu déjà collecté n'est pas recopié dans `data/raw/` (le terminal affiche « Deja collecte »).
@@ -447,7 +516,7 @@ Limites : jeu synthétique ; seulement 9 indicateurs dans le curated (les autres
 
 ## 11. Observabilité, incidents et reprise
 
-Chaque exécution reçoit un `run_id` (horodatage UTC) présent dans les logs (`reports/pipeline.log`), dans le rapport `reports/runs/run_<run_id>.json` (ou `pubmed_<run_id>.json`) et, pour les patients, dans la table `runs` de la base. Le DAG écrit en plus l'état de chaque tâche dans `reports/dag_last_run.json`.
+Chaque exécution reçoit un `run_id` (horodatage UTC) présent dans les logs (`reports/pipeline.log`), dans le rapport `reports/runs/run_<run_id>.json` (ou `pubmed_<run_id>.json`) et, pour les patients, dans la table `runs` de la base. Le DAG écrit en plus l'état de chaque tâche dans `reports/dag_last_run.json`. L'onglet « Qualité et incidents » du tableau de bord Streamlit et la route `/quality/summary` de l'API exposent ces informations.
 
 Le rapport patients contient : version du contrat, backend de base utilisé, lignes reçues, acceptées et rejetées, doublons, échecs par règle, âge du fichier raw, âge du fichier source (`source_age_days`), fraîcheur (`freshness`), statut (`PASS`, `PASS_WITH_WARNINGS`, `FAIL`) et durée. Le rapport PubMed contient les mêmes indicateurs de volume, le taux de rejet, l'année de l'article le plus récent et la fraîcheur.
 
@@ -462,8 +531,10 @@ Le rapport patients contient : version du contrat, backend de base utilisé, lig
 | 100 % d'articles invalides (année impossible) | PubMed | seuil de rejet du contrat PubMed | FAIL, raw et rejets conservés, curated non écrit |
 | Panne de la source patients pendant le DAG | DAG | code de sortie de la tâche | `patients` FAILED, tâches dépendantes `UPSTREAM_FAILED`, `pubmed` réussit ; reprise avec `--resume` |
 | Publication MongoDB impossible (URI Atlas invalide), incident réel du 06/11/2026 | PubMed | `ConfigurationError` DNS | FAIL, code 1, raw et curated JSONL conservés, reprise après correction de `MONGODB_URI` |
+| Dérive simulée dans le flux (MMSE impossible sur 200 événements) | flux | fenêtre glissante de 100 événements, seuil de 20 % | alerte, puis retour à la normale |
+| Base indisponible | API | exception de connexion | réponse HTTP 503 (testée) |
 
-Les quatre premiers incidents patients sont rejoués par `tests/test_incidents.py`, l'incident PubMed par `tests/test_pubmed.py` et le comportement du DAG par `tests/test_dag.py`. Dans chaque cas, le pipeline journalise une ligne `INCIDENT`, passe en FAIL, retourne le code de sortie 1, **ne modifie pas le curated** (hash SHA-256 identique avant et après) et, pour les patients, **inscrit le FAIL dans la table `runs`**. La reprise consiste à relancer le pipeline sur le fichier valide (ou `run_all.py --resume`) : le run repasse en PASS_WITH_WARNINGS avec 1963 lignes (`test_recovery_after_incidents`).
+Les quatre premiers incidents patients sont rejoués par `tests/test_incidents.py`, l'incident PubMed par `tests/test_pubmed.py`, le comportement du DAG par `tests/test_dag.py`, la dérive du flux par `tests/test_stream.py` et la base indisponible par `tests/test_api.py`. Dans chaque cas du pipeline, il journalise une ligne `INCIDENT`, passe en FAIL, retourne le code de sortie 1, **ne modifie pas le curated** (hash SHA-256 identique avant et après) et, pour les patients, **inscrit le FAIL dans la table `runs`**. La reprise consiste à relancer le pipeline sur le fichier valide (ou `run_all.py --resume`) : le run repasse en PASS_WITH_WARNINGS avec 1963 lignes (`test_recovery_after_incidents`).
 
 L'incident MongoDB n'est pas couvert par un test automatisé : la reprise a été jouée à la main (run PASS avec 195 articles, puis 195 après une seconde exécution).
 
@@ -480,7 +551,7 @@ Détail et preuves : [docs/incident_test.md](docs/incident_test.md).
 - **Rétention :** définie dans le contrat (`retention` : raw 90 jours, rapports 90 jours, au moins les 20 derniers rapports). `python src/purge.py` simule la purge (liste des fichiers à supprimer) et `python src/purge.py --apply` l'exécute. Le DAG n'exécute que la simulation. Le raw le plus récent et les échantillons ne sont jamais supprimés. Le curated, la base et MongoDB sont reconstructibles à tout moment depuis le raw.
 - **Données personnelles :** aucune (jeu synthétique, colonne `DoctorInCharge` exclue ; PubMed : métadonnées d'articles publiés uniquement).
 - **Secrets :** mots de passe et `MONGODB_URI` dans `.env` (non versionné), `.env.example` ne contient que des valeurs fictives.
-- **Accès :** le pipeline écrit dans PostgreSQL, Metabase lit seulement (les actions d'écriture de Metabase sont désactivées). Atlas n'accepte que l'adresse IP autorisée.
+- **Accès :** le pipeline écrit dans PostgreSQL ; Metabase, l'API et Streamlit lisent seulement (les actions d'écriture de Metabase sont désactivées, l'API n'expose aucune route d'écriture, l'accès SQLite de l'API est ouvert en lecture seule). L'API n'a pas d'authentification : usage local uniquement. Atlas n'accepte que l'adresse IP autorisée.
 - **Traçabilité :** chaque ligne de la table `patients` conserve `source_file` et `loaded_run_id` ; chaque article conserve `source_file` et `loaded_run_id` ; le rapport du modèle conserve le hash du curated lu ; le lignage est décrit dans `docs/lineage.md`.
 
 ## 13. Limites connues
@@ -492,6 +563,9 @@ Détail et preuves : [docs/incident_test.md](docs/incident_test.md).
 - MongoDB Atlas dépend d'un compte externe : le correcteur doit créer son propre cluster ou se contenter du JSONL local. L'incident MongoDB n'est pas couvert par un test automatisé et `--kpi` affiche une trace brute si Atlas est injoignable.
 - Le modèle de classification est une démonstration d'usage : données synthétiques, 9 indicateurs, un seul découpage train/test, résultats non transférables à des données réelles, MMSE déjà utilisé en pratique pour le diagnostic.
 - Le DAG est un script Python minimal : pas d'interface graphique, pas de planification, pas de relance automatique. Il tourne sur une seule machine.
+- L'API est une extension de démonstration : lecture seule, sans authentification ni limitation de débit, donc à ne pas exposer hors de la machine locale.
+- Le flux est simulé à partir d'une source figée : aucune source réelle n'émet en continu. Il ne remplace pas le batch et n'écrit pas dans la base.
+- Le tableau de bord Streamlit met les données en cache 60 secondes et dépend de fichiers de rapports produits par d'autres scripts (modèle, DAG, PubMed). Je n'ai pas testé son rendu sur un autre navigateur ni sur mobile.
 - Les questions et le tableau de bord Metabase ne sont pas versionnés dans Git (une capture est fournie).
 - Metabase et PostgreSQL tournent avec une configuration locale simple, sans chiffrement ni gestion fine des droits.
 - Le fichier des rejets (`data/rejected/rejected_rows.csv`) conserve la ligne source complète (35 colonnes, dont `Ethnicity` et `DoctorInCharge` masquée). Acceptable pour un jeu synthétique ; sur des données réelles, ces colonnes seraient retirées.
@@ -506,10 +580,15 @@ Détail et preuves : [docs/incident_test.md](docs/incident_test.md).
 - **MongoDB Atlas** pour la littérature PubMed : documents semi-structurés (nombre variable de termes MeSH, champs parfois absents), clé `pmid`, UPSERT idempotent. Rôle limité : situer les KPI dans la littérature, sans jointure patient.
 - **SQLite** conservé en secours : lancer les tests et le pipeline sans Docker.
 - **Docker Compose** : reproductibilité sur une autre machine en trois commandes.
-- **Metabase** : outil de BI réel plutôt qu'une interface codée à la main.
+- **Metabase** : outil de BI réel pour les KPI ; **Streamlit** (`app2.py`) en complément pour réunir indicateurs, qualité, littérature, modèle et pipeline dans une seule interface.
 - **DAG minimal en Python** (`run_all.py`, bibliothèque standard) : 5 tâches sur une seule machine ; il apporte l'ordre des dépendances, la propagation des échecs et la reprise sans service supplémentaire.
 - **Export Parquet** : format d'échange colonne pour d'autres outils d'analyse, produit à partir de la couche silver.
 - **scikit-learn** (régression logistique, forêt aléatoire, baseline) : modèles simples et interprétables, suffisants pour une démonstration d'usage de la couche silver.
+
+**Retenu comme extensions de démonstration (hors chaîne principale)**
+
+- **API REST en lecture seule (FastAPI)** : second mode de restitution pour un accès programmatique. Elle n'est pas nécessaire au projet (Metabase et les vues SQL servent déjà d'interface) ; elle est isolée du pipeline et testée.
+- **Simulation de flux** : montre la détection précoce d'une dérive par fenêtre glissante et vérifie la cohérence avec le batch. Les sources sont figées : le flux est simulé et la décision d'architecture reste le batch.
 
 **Écartés**
 
@@ -517,8 +596,8 @@ Détail et preuves : [docs/incident_test.md](docs/incident_test.md).
 - **PostgreSQL pour les articles** : possible avec une colonne JSON, mais moins naturel pour des documents à structure variable.
 - **Fichiers CSV seuls** : conservés pour le curated, mais sans contrainte de clé ni requêtes KPI en SQL.
 - **Airflow ou Prefect** : une machine, 5 tâches, aucune planification ; condition de réexamen : sources collectées périodiquement ou nombre de tâches en forte hausse.
-- **API (FastAPI)** : aucun consommateur, Metabase et les vues SQL servent déjà d'interface.
-- **Streaming** : les deux sources sont peu volatiles (jeu figé, littérature mise à jour lentement), aucun besoin de temps réel.
+- **Streaming comme mode de traitement de la chaîne principale** : les deux sources sont peu volatiles (jeu figé, littérature mise à jour lentement), aucun besoin de temps réel.
+- **API avec écriture ou exposition publique** : aucun besoin ; il faudrait d'abord une authentification et une limitation de débit.
 - **Modèles complexes (réseaux de neurones, réglage poussé)** : aucun besoin démontré sur 1963 lignes synthétiques.
 
 Comparaison détaillée des options : [docs/ADR_001.md](docs/ADR_001.md).
@@ -542,6 +621,9 @@ Comparaison détaillée des options : [docs/ADR_001.md](docs/ADR_001.md).
 | Export Parquet du curated, testé | Échanges avec d'autres outils d'analyse |
 | Modèle de classification du diagnostic sur la couche silver (baseline, validation croisée, importance par permutation, graine fixée, rapport tracé par hash) | Exploitation des données au-delà des KPI |
 | Tests automatisés de `pubmed.py` et du modèle (pas de fuite de la cible, supérieur à la baseline) | Seconde source et modèle non couverts par pytest |
+| Tableau de bord Streamlit complet (5 onglets, filtres, graphiques interactifs) lisant SQLite ou PostgreSQL | Interface minimale, qualité et littérature invisibles pour l'utilisateur |
+| API REST en lecture seule (FastAPI), 6 tests dont injection SQL et base indisponible | Pas d'accès programmatique aux données fiabilisées |
+| Simulation de flux avec fenêtre glissante, alertes et vérification de cohérence avec le batch, 5 tests | Détection d'une dérive seulement en fin de fichier |
 
 ### Restantes
 
@@ -550,21 +632,22 @@ Comparaison détaillée des options : [docs/ADR_001.md](docs/ADR_001.md).
 | Réentraîner le modèle avec davantage d'indicateurs du jeu source (colonnes écartées par le contrat), validation croisée imbriquée et réglage des hyperparamètres | 9 indicateurs, un seul découpage train/test |
 | Télécharger la source via l'API Kaggle (jeton en variable d'environnement) | Téléchargement manuel |
 | Automatiser l'exécution (GitHub Actions + `pytest`) | Pas de planification ni de contrôle automatique |
-| Alerter en cas d'échec (e-mail ou webhook) | Seuls les logs signalent un incident |
+| Alerter en cas d'échec (e-mail ou webhook), y compris sur les alertes du flux | Seuls les logs signalent un incident |
 | Tester l'incident MongoDB (publication impossible) | Incident joué à la main seulement |
+| Authentification et limitation de débit pour l'API avant toute exposition hors de la machine locale | API utilisable en local seulement |
 | Migrer le DAG vers Airflow ou Prefect | Planification, plusieurs sources et dépendances entre tâches |
-| Exposer les KPI par une API (FastAPI) | Usage limité au tableau de bord |
 | Historiser les modifications de la base | Source qui évolue dans le temps |
 | Outil de qualité dédié (Great Expectations, Pandera) | Nombre de règles difficile à maintenir à la main |
 | Intégrer les images IRM avec un stockage objet | Disponibilité d'une source avec lien patient-à-patient |
 
 ## 16. Usage d'outils d'IA
 
-- **Outil utilisé :** Claude (Anthropic).
-- **Tâches assistées :** structuration du projet, squelettes de code (pipeline, `pubmed.py`, `model.py`, `purge.py`, `run_all.py`, tests), configuration Docker, Metabase et MongoDB Atlas, relecture de la documentation, rédaction de la synthèse.
-- **Vérifications réalisées :** exécution du pipeline et des 30 tests, contrôle des KPI dans PostgreSQL, test des incidents avec comparaison du hash du curated avant et après, vérification de l'idempotence (1963 patients, 195 articles), panne et reprise du DAG, rejeu complet sur un clone propre du dépôt, contrôle que `.env` n'est pas versionné.
+- **Outil utilisé :** Claude.
+- **Tâches assistées :** structuration du projet, squelettes de code (pipeline, `pubmed.py`, `model.py`, `purge.py`, `run_all.py`, `api.py`, `stream_demo.py`, `app2.py`, tests), configuration Docker, Metabase et MongoDB Atlas, relecture de la documentation, rédaction de la synthèse.
+- **Vérifications réalisées :** exécution du pipeline et des 41 tests, contrôle des KPI dans PostgreSQL, test des incidents avec comparaison du hash du curated avant et après, vérification de l'idempotence (1963 patients, 195 articles), panne et reprise du DAG, flux sans dérive comparé au batch (mêmes volumes) et avec dérive (alerte puis retour à la normale), essai des routes de l'API dans Swagger, parcours des cinq onglets du tableau de bord, rejeu complet sur un clone propre du dépôt, contrôle que `.env` n'est pas versionné.
 - **Parties retravaillées personnellement :**
   - **Cadrage :** choix du sujet et de la source Kaggle, lecture de la licence (CC BY 4.0) et de la mention « Synthetic », périmètre limité au CSV clinique (images IRM écartées).
   - **Seconde source :** création du cluster MongoDB Atlas (utilisateur, adresse IP autorisée, URI dans `.env`), correction de l'URI après l'erreur DNS du 06/11/2026.
   - **Modèle de classification :** j'ai lancé `src/model.py` sur la couche silver (1963 patients) et analysé les résultats. Deux modèles (régression logistique, forêt aléatoire) sont comparés à une baseline qui prédit toujours « non diagnostiqué ». J'ai retenu l'AUC et le rappel plutôt que l'accuracy, car les classes sont déséquilibrées (35 % de diagnostiqués) : la baseline atteint 0,646 d'accuracy sans détecter aucun patient. La forêt aléatoire obtient 0,757 d'AUC sur le test (0,722 pour la régression logistique), un signal réel mais modeste. L'importance par permutation montre que le MMSE (0,16) et les plaintes de mémoire (0,11) portent presque tout le signal, alors que l'âge, la tension et le cholestérol n'apportent presque rien. Cela confirme mes KPI. Les résultats sont reproductibles (graine fixée à 42, mêmes chiffres sur deux exécutions et sur le clone propre). Les données étant synthétiques, je n'en tire aucune conclusion médicale.
-  - **Exécution et preuves :** pipeline, tests, incidents, fraîcheur, DAG avec panne et reprise, modèle, rejeu propre, captures Atlas et Metabase.
+  - **Extensions :** j'ai choisi d'ajouter l'API, la simulation de flux et le tableau de bord Streamlit complet. Je sais que l'API et le flux ne sont pas nécessaires à ce projet (aucun consommateur, sources figées) : je les présente comme des extensions de démonstration, isolées de la chaîne principale. J'ai vérifié que le flux sans dérive retrouve les volumes du batch (2149 événements, 1963 acceptés, 186 rejetés) et que l'alerte se déclenche avec la dérive. J'ai gardé l'ancien `app.py` comme secours et placé le nouveau tableau de bord dans `app2.py`.
+  - **Exécution et preuves :** pipeline, tests, incidents, fraîcheur, DAG avec panne et reprise, modèle, flux, rejeu propre, captures Atlas, Metabase et Streamlit.

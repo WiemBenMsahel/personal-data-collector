@@ -1,0 +1,32 @@
+{
+  "events": 2149,
+  "accepted": 1778,
+  "rejected": 371,
+  "reject_rate": 0.1726,
+  "rule_failures": {
+    "bp_coherent": 186,
+    "mmse_range": 200
+  },
+  "warnings": {},
+  "alerts": [
+    {
+      "at_event": 614,
+      "window_reject_rate": 0.21,
+      "type": "ALERTE"
+    },
+    {
+      "at_event": 884,
+      "window_reject_rate": 0.2,
+      "type": "RETOUR_NORMAL"
+    }
+  ],
+  "pipeline": "stream-demo",
+  "run_id": "20261107T171202Z",
+  "source": "alzheimers_disease_data.csv",
+  "drift_injected": true,
+  "window": 100,
+  "alert_rate": 0.2,
+  "duration_seconds": 8.31,
+  "events_per_second": 258.5,
+  "note": "Flux simule a partir d'une source figee : preuve de concept, hors chaine principale."
+}

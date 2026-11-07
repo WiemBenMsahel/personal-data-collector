@@ -1,32 +1,20 @@
 {
   "events": 2149,
-  "accepted": 1778,
-  "rejected": 371,
-  "reject_rate": 0.1726,
+  "accepted": 1963,
+  "rejected": 186,
+  "reject_rate": 0.0866,
   "rule_failures": {
-    "bp_coherent": 186,
-    "mmse_range": 200
+    "bp_coherent": 186
   },
   "warnings": {},
-  "alerts": [
-    {
-      "at_event": 614,
-      "window_reject_rate": 0.21,
-      "type": "ALERTE"
-    },
-    {
-      "at_event": 884,
-      "window_reject_rate": 0.2,
-      "type": "RETOUR_NORMAL"
-    }
-  ],
+  "alerts": [],
   "pipeline": "stream-demo",
-  "run_id": "20261107T165808Z",
+  "run_id": "20261107T171202Z",
   "source": "alzheimers_disease_data.csv",
-  "drift_injected": true,
+  "drift_injected": false,
   "window": 100,
   "alert_rate": 0.2,
-  "duration_seconds": 8.4,
-  "events_per_second": 255.8,
+  "duration_seconds": 0.02,
+  "events_per_second": 104356.2,
   "note": "Flux simule a partir d'une source figee : preuve de concept, hors chaine principale."
 }
