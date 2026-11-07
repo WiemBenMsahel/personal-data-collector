@@ -403,6 +403,7 @@ Le contrat définit `freshness.max_source_age_days` (30 jours). À chaque run, l
 - PubMed : seulement 50 articles récents par indicateur, sélectionnés par une requête simple (pas une revue systématique), métadonnées uniquement. Pas de clé commune avec les patients : recoupement par indicateur.
 - MongoDB Atlas dépend d'un compte externe : le correcteur doit créer son propre cluster ou se contenter du JSONL local. L'incident MongoDB n'est pas couvert par un test automatisé et `--kpi` affiche une trace brute si Atlas est injoignable.
 - Les questions et le tableau de bord Metabase ne sont pas versionnés dans Git (une capture est fournie).
+- Le fichier des rejets (`data/rejected/rejected_rows.csv`) conserve la ligne source complète (35 colonnes, dont `Ethnicity` et `DoctorInCharge` masquée). Acceptable pour un jeu synthétique ; sur des données réelles, ces colonnes seraient retirées.
 - Metabase et PostgreSQL tournent avec une configuration locale simple, sans chiffrement ni gestion fine des droits.
 - Aucune alerte envoyée en cas d'incident : seuls les logs, le code de sortie et la table `runs` le signalent.
 - Pas de planification automatique : la collecte et la purge se lancent à la main.
