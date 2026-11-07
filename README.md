@@ -3,6 +3,7 @@
 Projet final du module **Architectures BD et collecte de données**, ESEO 2026-2027
 (prolongement du projet personnel des TP des séances 1 à 3).
 Auteure : Wiem Ben M'sahel.
+Synthèse du projet : [docs/synthese.md](docs/synthese.md).
 
 ## 1. Objectif de l'application
 
@@ -240,6 +241,7 @@ personal-data-collector/
 │   │   └── pubmed_rejected.jsonl    articles rejetés avec la cause
 │   └── source_download/         fichiers téléchargés ou simulés (ignorés par Git)
 ├── docs/
+│   ├── synthese.md              synthèse du projet (version PDF déposée sur Moodle)
 │   ├── architecture_v1.png      architecture initiale
 │   ├── architecture_v2.png      architecture finale
 │   ├── ADR_001.md               décision d'architecture
@@ -358,7 +360,7 @@ Les articles situent les indicateurs dans la littérature. Chiffres au 06/11/202
 - Le curated CSV est mis à jour par UPSERT sur `patient_id`, avec écriture atomique (fichier temporaire puis remplacement).
 - La base (PostgreSQL ou SQLite) est mise à jour par UPSERT (`ON CONFLICT (patient_id) DO UPDATE`) dans une transaction unique : tout ou rien. La clé primaire `patient_id` garantit l'unicité.
 - Relancer le pipeline avec la même entrée laisse donc `curated_total_rows` et le nombre de patients en base inchangés (1963). Ce comportement est vérifié par `test_rerun_is_idempotent`.
-- Côté PubMed, l'UPSERT se fait sur `_id = pmid` : deux exécutions successives laissent 195 documents dans la collection `articles` (vérifié le 06/11/2026).
+- Côté PubMed, l'UPSERT se fait sur `_id = pmid` : plusieurs exécutions successives laissent 195 documents dans la collection `articles` (vérifié les 06 et 07/11/2026).
 
 ## 11. Observabilité, incidents et reprise
 
@@ -403,8 +405,8 @@ Le contrat définit `freshness.max_source_age_days` (30 jours). À chaque run, l
 - PubMed : seulement 50 articles récents par indicateur, sélectionnés par une requête simple (pas une revue systématique), métadonnées uniquement. Pas de clé commune avec les patients : recoupement par indicateur.
 - MongoDB Atlas dépend d'un compte externe : le correcteur doit créer son propre cluster ou se contenter du JSONL local. L'incident MongoDB n'est pas couvert par un test automatisé et `--kpi` affiche une trace brute si Atlas est injoignable.
 - Les questions et le tableau de bord Metabase ne sont pas versionnés dans Git (une capture est fournie).
-- Le fichier des rejets (`data/rejected/rejected_rows.csv`) conserve la ligne source complète (35 colonnes, dont `Ethnicity` et `DoctorInCharge` masquée). Acceptable pour un jeu synthétique ; sur des données réelles, ces colonnes seraient retirées.
 - Metabase et PostgreSQL tournent avec une configuration locale simple, sans chiffrement ni gestion fine des droits.
+- Le fichier des rejets (`data/rejected/rejected_rows.csv`) conserve la ligne source complète (35 colonnes, dont `Ethnicity` et `DoctorInCharge` masquée). Acceptable pour un jeu synthétique ; sur des données réelles, ces colonnes seraient retirées.
 - Aucune alerte envoyée en cas d'incident : seuls les logs, le code de sortie et la table `runs` le signalent.
 - Pas de planification automatique : la collecte et la purge se lancent à la main.
 - La fraîcheur mesure l'âge du fichier source ; pour PubMed, aucun contrôle de fraîcheur n'est implémenté.
@@ -462,6 +464,11 @@ Comparaison détaillée des options : [docs/ADR_001.md](docs/ADR_001.md).
 ## 16. Usage d'outils d'IA
 
 - **Outil utilisé :** Claude (Anthropic).
-- **Tâches assistées :** structuration du projet, squelettes de code (`publish.py`, `app.py`, `pubmed.py`, `purge.py`, `make_incidents.py`), migration du contrat YAML, tests d'incident et de rétention, configuration Docker Compose, Metabase et MongoDB Atlas, ADR, schémas d'architecture, relecture de la documentation.
-- **Vérifications réalisées :** exécution du pipeline et des 14 tests, contrôle des KPI dans PostgreSQL contre `analysis.py`, test des quatre incidents avec code de sortie et comparaison du hash du curated avant et après, relance du pipeline pour vérifier l'idempotence (1963 lignes en base), diagnostic et correction de l'erreur DNS de l'URI Atlas, exécution de `pubmed.py` deux fois (195 documents à chaque fois), simulation de fraîcheur (fichier vieilli à 45 jours) et purge en simulation, contrôle que `.env` n'est pas versionné.
-- **Parties retravaillées personnellement :** [À COMPLÉTER PAR TOI : 3 ou 4 phrases vraies, voir les questions dans le message]
+- **Tâches assistées :** structuration du projet, squelettes de code (`publish.py`, `app.py`, `pubmed.py`, `purge.py`, `make_incidents.py`), migration du contrat YAML, tests d'incident et de rétention, configuration Docker Compose, Metabase et MongoDB Atlas, ADR, schémas d'architecture, relecture de la documentation, rédaction de la synthèse.
+- **Vérifications réalisées :** exécution du pipeline et des 14 tests, contrôle des KPI dans PostgreSQL contre `analysis.py`, test des quatre incidents avec code de sortie et comparaison du hash du curated avant et après, relance du pipeline pour vérifier l'idempotence (1963 lignes en base), exécution de `pubmed.py` plusieurs fois (195 documents à chaque fois), simulation de fraîcheur (fichier vieilli à 45 jours) et purge en simulation, rejeu complet sur un clone propre du dépôt le 07/11/2026 (pipeline, tests, seconde source sans MongoDB), contrôle que `.env` n'est pas versionné et que les rapports et captures ne contiennent aucun secret.
+- **Parties retravaillées personnellement :**
+  - **Cadrage :** j'ai choisi le sujet (maladie d'Alzheimer) et la source Kaggle, lu moi-même la licence (CC BY 4.0) et la mention « Synthetic » sur la page du jeu, et gardé un périmètre limité au CSV clinique (images IRM écartées).
+  - **Seconde source :** suite à la recommandation de l'enseignant, j'ai créé moi-même le cluster MongoDB Atlas (utilisateur, adresse IP autorisée, URI dans `.env`) et lancé la collecte PubMed.
+  - **Incident réel :** l'URI Atlas n'était pas correctement renseignée (erreur DNS) ; je l'ai corrigée, relancé `pubmed.py` jusqu'au succès (195 documents, puis 195 après relance) et l'incident est documenté dans `docs/incident_test.md`.
+  - **Exécution et preuves :** j'ai lancé moi-même le pipeline, les tests, les incidents simulés, la démonstration de fraîcheur et le rejeu sur un clone propre, réalisé les captures Atlas et Metabase, et régénéré les rapports de démonstration (rejets, fraîcheur) quand ils avaient été écrasés.
+  - **Maîtrise :** je peux expliquer le rôle de chaque module de `src/` et les options comparées dans l'ADR.
