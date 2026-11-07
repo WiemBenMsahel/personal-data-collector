@@ -10,3 +10,6 @@ data/raw/*
 !data/raw/sample_pubmed.xml
 data/source_download/
 data/curated/*.db
+venv/
+*.bak
+data/curated/*.parquet

@@ -1,0 +1,22 @@
+{
+  "pipeline": "pubmed-literature",
+  "run_id": "20261107T104610Z",
+  "status": "PASS",
+  "contract_version": "1.0",
+  "input_rows": 195,
+  "accepted_rows": 195,
+  "rejected_rows": 0,
+  "rule_failures": {
+    "pmid_present": 0,
+    "title_present": 0,
+    "year_valid": 0,
+    "duplicate_pmid": 0,
+    "abstract_present": 0
+  },
+  "source_file": "pubmed_20261107T104610Z.xml",
+  "reject_rate": 0.0,
+  "newest_article_year": 2027,
+  "freshness": "OK",
+  "mongo_documents": 195,
+  "duration_seconds": 7.39
+}
