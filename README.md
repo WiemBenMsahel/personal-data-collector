@@ -3,7 +3,7 @@
 Projet final du module **Architectures BD et collecte de données**, ESEO 2026-2027
 (prolongement du projet personnel des TP des séances 1 à 3).
 Auteure : Wiem Ben M'sahel.
-Synthèse du projet : [docs/synthese.md](docs/synthese.md).
+Synthèse du projet : [docs/synthese.pdf](docs/synthese.pdf) (version source : [docs/synthese.md](docs/synthese.md)).
 
 ## 1. Objectif de l'application
 
@@ -59,8 +59,10 @@ Synthèse du projet : [docs/synthese.md](docs/synthese.md).
 Kaggle CSV -> collect.py -> RAW -> Validation (contrat) -> Transformation -> CURATED (CSV)
                                        |                                        |
                                        +-> REJECTED                             +-> PostgreSQL (table patients)
-                                       +-> logs + rapports + table runs                 |
-                                                                                        +-> Vues KPI (gold) -> Metabase
+                                       +-> logs + rapports + table runs         |       |
+                                                                                |       +-> Vues KPI (gold) -> Metabase
+                                                                                |
+                                                                                +-> model.py -> reports/model_report.json
 
 PubMed API -> pubmed.py -> RAW (XML) -> Validation -> CURATED (JSONL) -> MongoDB Atlas (articles, searches)
                               |
@@ -81,7 +83,7 @@ PubMed API -> pubmed.py -> RAW (XML) -> Validation -> CURATED (JSONL) -> MongoDB
 | Silver (curated) | `data/curated/dataset.csv`, table `patients`, `pubmed_articles.jsonl`, collection `articles` | Données validées, typées, dédoublonnées |
 | Gold (mart) | Vues SQL `v_kpi_by_diagnosis` et `v_kpi_by_age_group` | Indicateurs prêts à interroger |
 
-Les lignes invalides sont conservées à part (`data/rejected/`).
+Les lignes invalides sont conservées à part (`data/rejected/`). Le modèle de classification lit uniquement la couche silver.
 
 ### Services (Docker Compose)
 
@@ -128,7 +130,7 @@ Puis éditer `.env` et remplacer `change_me` par un mot de passe de son choix (l
 # 1. Télécharger alzheimers_disease_data.csv depuis Kaggle
 #    et le placer dans data/source_download/
 python src/pipeline.py          # collecte, validation, curated, base SQLite, rapport
-pytest -q                       # 14 tests
+pytest -q                       # 20 tests
 ```
 
 Résultat attendu : `PASS_WITH_WARNINGS`, 2149 lignes reçues, 1963 acceptées, 186 rejetées, 1963 patients en base. Le rapport est dans `reports/run_report.json`.
@@ -171,6 +173,14 @@ python src/pubmed.py --kpi    # compteurs depuis MongoDB
 
 Un échantillon de raw est fourni : `data/raw/sample_pubmed.xml`.
 
+### Modèle de classification (usage de la couche silver)
+
+```bash
+python src/model.py
+```
+
+Le script lit `data/curated/dataset.csv` (il faut donc avoir lancé le pipeline), entraîne une régression logistique et une forêt aléatoire, les compare à une baseline majoritaire et écrit `reports/model_report.json` (métriques, importance des indicateurs, hash SHA-256 du curated lu). Il nécessite `scikit-learn`, installé par `requirements.txt`. Résultats en section 9.
+
 ### Tableau de bord Metabase
 
 1. Ouvrir http://localhost:3000 et créer le compte administrateur (local).
@@ -185,7 +195,7 @@ Contenu du tableau de bord : nombre de patients, MMSE moyen par diagnostic, part
 pytest -q
 ```
 
-Les tests tournent sur SQLite, dans un dossier temporaire : ils ne modifient ni le curated, ni le raw, ni la base.
+Les tests tournent sur SQLite, dans un dossier temporaire : ils ne modifient ni le curated, ni le raw, ni la base. Ils couvrent les règles de qualité, le contrat, les incidents, la rétention, l'analyse PubMed et le modèle de classification.
 
 ### Démonstration d'une donnée invalide
 
@@ -218,7 +228,7 @@ python src/purge.py --apply     # suppression réelle
 ```
 personal-data-collector/
 ├── README.md
-├── requirements.txt             dépendances locales (pipeline, PubMed, tests, Streamlit)
+├── requirements.txt             dépendances locales (pipeline, PubMed, modèle, tests, Streamlit)
 ├── requirements-docker.txt      dépendances de l'image du pipeline
 ├── Dockerfile                   image du pipeline
 ├── docker-compose.yml           postgres, metabase, pipeline
@@ -241,7 +251,8 @@ personal-data-collector/
 │   │   └── pubmed_rejected.jsonl    articles rejetés avec la cause
 │   └── source_download/         fichiers téléchargés ou simulés (ignorés par Git)
 ├── docs/
-│   ├── synthese.md              synthèse du projet (version PDF déposée sur Moodle)
+│   ├── synthese.pdf             synthèse du projet (déposée sur Moodle)
+│   ├── synthese.md              version source de la synthèse
 │   ├── architecture_v1.png      architecture initiale
 │   ├── architecture_v2.png      architecture finale
 │   ├── ADR_001.md               décision d'architecture
@@ -254,6 +265,7 @@ personal-data-collector/
 │   ├── run_report.json          dernier rapport d'exécution
 │   ├── run_report_dirty_demo.json   rapport de la démo de rejets
 │   ├── run_report_stale_demo.json   rapport de la démo de fraîcheur
+│   ├── model_report.json        rapport du modèle de classification
 │   ├── runs/                    un rapport JSON par exécution (CSV et PubMed)
 │   ├── profile.json             profilage initial
 │   └── mmse_by_diagnosis.png
@@ -265,6 +277,7 @@ personal-data-collector/
 │   ├── publish.py               publication PostgreSQL ou SQLite (UPSERT), vues KPI, journal des runs
 │   ├── pipeline.py              orchestration, idempotence, fraîcheur, rapport, gestion des incidents
 │   ├── pubmed.py                seconde source : PubMed vers MongoDB Atlas
+│   ├── model.py                 modèle de classification sur la couche silver
 │   ├── purge.py                 purge selon la rétention du contrat (simulation par défaut)
 │   ├── analysis.py              statistiques par diagnostic
 │   └── app.py                   tableau de bord Streamlit (secours, SQLite)
@@ -272,7 +285,9 @@ personal-data-collector/
     ├── test_quality.py          règles de qualité
     ├── test_contract.py         le contrat pilote le code
     ├── test_incidents.py        incidents automatisés, idempotence, reprise
-    └── test_retention.py        sélection des fichiers à purger
+    ├── test_retention.py        sélection des fichiers à purger
+    ├── test_pubmed.py           analyse et validation des articles PubMed
+    └── test_model.py            modèle : pas de fuite de la cible, supérieur à la baseline
 ```
 
 ## 8. Contrat de données et règles de qualité
@@ -354,6 +369,24 @@ Les articles situent les indicateurs dans la littérature. Chiffres au 06/11/202
 
 195 articles distincts sont stockés dans MongoDB (un article trouvé par deux indicateurs n'est stocké qu'une fois). Le volume d'articles est un indice de l'intérêt de la recherche pour chaque indicateur, pas une preuve de lien avec nos données.
 
+### Modèle de classification (démonstration)
+
+Objectif : vérifier quels indicateurs de la couche silver portent un signal sur le diagnostic. Ce n'est pas un outil clinique. Le script (`python src/model.py`) lit le curated, sépare 80 % / 20 % (découpage stratifié, graine 42), compare deux modèles à une baseline et écrit `reports/model_report.json` avec le hash SHA-256 du curated lu. Les variables sont les 9 indicateurs cliniques du curated ; sont exclus les identifiants, `source_file`, `diagnosis_label` (copie de la cible) et `age_group` (dérivé de l'âge). Le modèle retenu est choisi sur la validation croisée (5 plis, jeu d'entraînement), jamais sur le jeu de test.
+
+| Modèle | AUC (validation croisée) | AUC (test) | Accuracy | Rappel | F1 |
+|---|---|---|---|---|---|
+| Baseline majoritaire | 0,500 | 0,500 | 0,646 | 0,00 | 0,00 |
+| Régression logistique | 0,711 | 0,722 | 0,623 | 0,60 | 0,53 |
+| Forêt aléatoire | 0,715 | 0,757 | 0,723 | 0,48 | 0,55 |
+
+Lecture des résultats :
+
+- Les deux modèles distinguent mieux que le hasard (AUC de 0,72 à 0,76) mais le signal reste modeste. Leurs scores de validation croisée sont presque identiques (0,711 et 0,715) : aucun n'est clairement meilleur. La forêt aléatoire a été retenue parce que son AUC de validation croisée est légèrement supérieure.
+- L'accuracy est trompeuse car les classes sont déséquilibrées (35 % de diagnostiqués) : la baseline atteint 0,646 en ne détectant aucun patient (rappel nul). L'AUC et le rappel sont plus informatifs.
+- Importance par permutation (baisse d'AUC sur le jeu de test, forêt aléatoire) : `mmse` 0,16 et `memory_complaints` 0,11 portent presque tout le signal ; `bmi` 0,015 ; la tension, le cholestérol et l'âge sont proches de zéro. Ce résultat concorde avec les KPI (moyennes quasi identiques pour la tension, le cholestérol et l'âge) et ajoute `memory_complaints` comme indicateur à étudier.
+
+Limites : jeu synthétique ; seulement 9 indicateurs dans le curated (les autres colonnes de la source ne sont pas retenues par le contrat) ; un seul découpage train/test de 393 lignes ; pas de réglage des hyperparamètres ; l'importance par permutation ne prouve aucun lien causal. Aucune valeur médicale.
+
 ## 10. Idempotence
 
 - Le fichier source Kaggle est identifié par son hash SHA-256 : un contenu déjà collecté n'est pas recopié dans `data/raw/` (le terminal affiche « Deja collecte »).
@@ -395,7 +428,7 @@ Le contrat définit `freshness.max_source_age_days` (30 jours). À chaque run, l
 - **Données personnelles :** aucune (jeu synthétique, colonne `DoctorInCharge` exclue ; PubMed : métadonnées d'articles publiés uniquement).
 - **Secrets :** mots de passe et `MONGODB_URI` dans `.env` (non versionné), `.env.example` ne contient que des valeurs fictives.
 - **Accès :** le pipeline écrit dans PostgreSQL, Metabase lit seulement (les actions d'écriture de Metabase sont désactivées). Atlas n'accepte que l'adresse IP autorisée.
-- **Traçabilité :** chaque ligne de la table `patients` conserve `source_file` et `loaded_run_id` ; chaque article conserve `source_file` et `loaded_run_id`.
+- **Traçabilité :** chaque ligne de la table `patients` conserve `source_file` et `loaded_run_id` ; chaque article conserve `source_file` et `loaded_run_id` ; le rapport du modèle conserve le hash du curated lu.
 
 ## 13. Limites connues
 
@@ -404,11 +437,12 @@ Le contrat définit `freshness.max_source_age_days` (30 jours). À chaque run, l
 - Pas de lien patient-à-patient avec les images IRM, qui ne sont pas intégrées.
 - PubMed : seulement 50 articles récents par indicateur, sélectionnés par une requête simple (pas une revue systématique), métadonnées uniquement. Pas de clé commune avec les patients : recoupement par indicateur.
 - MongoDB Atlas dépend d'un compte externe : le correcteur doit créer son propre cluster ou se contenter du JSONL local. L'incident MongoDB n'est pas couvert par un test automatisé et `--kpi` affiche une trace brute si Atlas est injoignable.
+- Le modèle de classification est une démonstration d'usage : données synthétiques, 9 indicateurs, un seul découpage train/test, résultats non transférables à des données réelles.
 - Les questions et le tableau de bord Metabase ne sont pas versionnés dans Git (une capture est fournie).
 - Metabase et PostgreSQL tournent avec une configuration locale simple, sans chiffrement ni gestion fine des droits.
 - Le fichier des rejets (`data/rejected/rejected_rows.csv`) conserve la ligne source complète (35 colonnes, dont `Ethnicity` et `DoctorInCharge` masquée). Acceptable pour un jeu synthétique ; sur des données réelles, ces colonnes seraient retirées.
 - Aucune alerte envoyée en cas d'incident : seuls les logs, le code de sortie et la table `runs` le signalent.
-- Pas de planification automatique : la collecte et la purge se lancent à la main.
+- Pas de planification automatique : la collecte, la purge et l'entraînement du modèle se lancent à la main.
 - La fraîcheur mesure l'âge du fichier source ; pour PubMed, aucun contrôle de fraîcheur n'est implémenté.
 
 ## 14. Choix et choix écartés
@@ -420,6 +454,7 @@ Le contrat définit `freshness.max_source_age_days` (30 jours). À chaque run, l
 - **SQLite** conservé en secours : lancer les tests et le pipeline sans Docker.
 - **Docker Compose** : reproductibilité sur une autre machine en trois commandes.
 - **Metabase** : outil de BI réel plutôt qu'une interface codée à la main.
+- **scikit-learn** (régression logistique, forêt aléatoire, baseline) : modèles simples et interprétables, suffisants pour une démonstration d'usage de la couche silver.
 
 **Écartés**
 
@@ -427,6 +462,7 @@ Le contrat définit `freshness.max_source_age_days` (30 jours). À chaque run, l
 - **PostgreSQL pour les articles** : possible avec une colonne JSON, mais moins naturel pour des documents à structure variable.
 - **Fichiers CSV seuls** : conservés pour le curated, mais sans contrainte de clé ni requêtes KPI en SQL.
 - **Streaming, orchestrateur (Airflow, etc.)** : sources peu volatiles, traitement à la demande.
+- **Modèles complexes (réseaux de neurones, réglage poussé)** : aucun besoin démontré sur 1963 lignes synthétiques.
 
 Comparaison détaillée des options : [docs/ADR_001.md](docs/ADR_001.md).
 
@@ -444,15 +480,16 @@ Comparaison détaillée des options : [docs/ADR_001.md](docs/ADR_001.md).
 | Metabase en lecture seule sur les vues KPI | Interface limitée à un Streamlit minimal |
 | Seconde source PubMed (API) vers MongoDB Atlas, avec règles de qualité, rejets et UPSERT | Une seule source tabulaire, sans recoupement avec la littérature |
 | Contrôle de fraîcheur de la source et purge selon la rétention, pilotés par le contrat (v1.2), avec test automatisé de la purge | Pas de contrôle de fraîcheur, fichiers qui s'accumulent |
+| Modèle de classification du diagnostic sur la couche silver (baseline, validation croisée, importance par permutation, rapport tracé par hash) | Exploitation des données au-delà des KPI |
+| Tests automatisés de `pubmed.py` (analyse et validation sur un XML d'exemple) et du modèle (pas de fuite de la cible, supérieur à la baseline) | Seconde source et modèle non couverts par pytest |
 
 ### Restantes
 
 | Amélioration | Limite traitée |
 |---|---|
-| Modèle de classification du diagnostic sur la couche silver (démonstration seulement : données synthétiques) | Exploitation des données au-delà des KPI |
+| Réentraîner le modèle avec davantage d'indicateurs du jeu source (colonnes écartées par le contrat), validation croisée imbriquée et réglage des hyperparamètres | 9 indicateurs, un seul découpage train/test |
 | Télécharger la source via l'API Kaggle (jeton en variable d'environnement) | Téléchargement manuel |
 | Automatiser l'exécution (GitHub Actions + `pytest`) | Pas de planification ni de contrôle automatique |
-| Tests automatisés de `pubmed.py` (parsing et validation sur un XML d'exemple) | Seconde source non couverte par pytest |
 | Alerter en cas d'échec (e-mail ou webhook) | Seuls les logs signalent un incident |
 | Exposer les KPI par une API (FastAPI) | Usage limité au tableau de bord |
 | Exporter le curated en Parquet | Échanges avec d'autres outils d'analyse |
@@ -464,11 +501,11 @@ Comparaison détaillée des options : [docs/ADR_001.md](docs/ADR_001.md).
 ## 16. Usage d'outils d'IA
 
 - **Outil utilisé :** Claude (Anthropic).
-- **Tâches assistées :** structuration du projet, squelettes de code (`publish.py`, `app.py`, `pubmed.py`, `purge.py`, `make_incidents.py`), migration du contrat YAML, tests d'incident et de rétention, configuration Docker Compose, Metabase et MongoDB Atlas, ADR, schémas d'architecture, relecture de la documentation, rédaction de la synthèse.
-- **Vérifications réalisées :** exécution du pipeline et des 14 tests, contrôle des KPI dans PostgreSQL contre `analysis.py`, test des quatre incidents avec code de sortie et comparaison du hash du curated avant et après, relance du pipeline pour vérifier l'idempotence (1963 lignes en base), exécution de `pubmed.py` plusieurs fois (195 documents à chaque fois), simulation de fraîcheur (fichier vieilli à 45 jours) et purge en simulation, rejeu complet sur un clone propre du dépôt le 07/11/2026 (pipeline, tests, seconde source sans MongoDB), contrôle que `.env` n'est pas versionné et que les rapports et captures ne contiennent aucun secret.
+- **Tâches assistées :** structuration du projet, squelettes de code (`publish.py`, `app.py`, `pubmed.py`, `purge.py`, `model.py`, `make_incidents.py`), migration du contrat YAML, tests d'incident, de rétention, de `pubmed.py` et du modèle, configuration Docker Compose, Metabase et MongoDB Atlas, ADR, schémas d'architecture, relecture de la documentation, rédaction de la synthèse.
+- **Vérifications réalisées :** exécution du pipeline et des 20 tests, contrôle des KPI dans PostgreSQL contre `analysis.py`, test des quatre incidents avec code de sortie et comparaison du hash du curated avant et après, relance du pipeline pour vérifier l'idempotence (1963 lignes en base), exécution de `pubmed.py` plusieurs fois (195 documents à chaque fois), simulation de fraîcheur (fichier vieilli à 45 jours) et purge en simulation, exécution du modèle (comparaison à une baseline, sélection sur validation croisée, test d'absence de fuite de la cible), rejeu complet sur un clone propre du dépôt, contrôle que `.env` n'est pas versionné et que les rapports et captures ne contiennent aucun secret.
 - **Parties retravaillées personnellement :**
   - **Cadrage :** j'ai choisi le sujet (maladie d'Alzheimer) et la source Kaggle, lu moi-même la licence (CC BY 4.0) et la mention « Synthetic » sur la page du jeu, et gardé un périmètre limité au CSV clinique (images IRM écartées).
   - **Seconde source :** suite à la recommandation de l'enseignant, j'ai créé moi-même le cluster MongoDB Atlas (utilisateur, adresse IP autorisée, URI dans `.env`) et lancé la collecte PubMed.
   - **Incident réel :** l'URI Atlas n'était pas correctement renseignée (erreur DNS) ; je l'ai corrigée, relancé `pubmed.py` jusqu'au succès (195 documents, puis 195 après relance) et l'incident est documenté dans `docs/incident_test.md`.
-  - **Exécution et preuves :** j'ai lancé moi-même le pipeline, les tests, les incidents simulés, la démonstration de fraîcheur et le rejeu sur un clone propre, réalisé les captures Atlas et Metabase, et régénéré les rapports de démonstration (rejets, fraîcheur) quand ils avaient été écrasés.
+  - **Exécution et preuves :** j'ai lancé moi-même le pipeline, les tests, les incidents simulés, la démonstration de fraîcheur, le modèle et le rejeu sur un clone propre, réalisé les captures Atlas et Metabase, et régénéré les rapports de démonstration (rejets, fraîcheur) quand ils avaient été écrasés.
   - **Maîtrise :** je peux expliquer le rôle de chaque module de `src/` et les options comparées dans l'ADR.

@@ -36,7 +36,7 @@ Il n'existe aucune clé commune entre les patients et les articles : le recoupem
 
 <img src="architecture_v2.png" alt="Architecture V2" width="650">
 
-**Chaîne patients.** Collecte reproductible, zone raw horodatée avec hash SHA-256, validation pilotée par le contrat de données, rejets conservés, transformation, zone curated (CSV), base PostgreSQL (SQLite en secours) par UPSERT, vues SQL d'indicateurs, tableau de bord Metabase.
+**Chaîne patients.** Collecte reproductible, zone raw horodatée avec hash SHA-256, validation pilotée par le contrat de données, rejets conservés, transformation, zone curated (CSV), base PostgreSQL (SQLite en secours) par UPSERT, vues SQL d'indicateurs, tableau de bord Metabase. Un modèle de classification lit la couche curated (voir partie 4).
 
 **Chaîne PubMed.** Recherche par indicateur, raw XML horodaté, validation, curated JSONL, MongoDB Atlas (UPSERT sur `pmid`).
 
@@ -75,7 +75,7 @@ Dans les cas bloquants, le curated n'est pas modifié (hash SHA-256 identique av
 
 **Idempotence.** Relancer le pipeline ne duplique rien : 1963 patients en base après plusieurs exécutions, 195 articles dans MongoDB après plusieurs exécutions.
 
-**Tests et reproductibilité.** 14 tests automatisés. Rejeu sur un clone propre du dépôt le 07/11/2026 : pipeline, tests et seconde source (sans MongoDB) fonctionnent en suivant le README.
+**Tests et reproductibilité.** 20 tests automatisés (règles de qualité, contrat, incidents, rétention, seconde source, modèle). Rejeu sur un clone propre du dépôt le 07/11/2026 : pipeline, tests et seconde source (sans MongoDB) fonctionnent en suivant le README.
 
 ## 4. Résultat
 
@@ -110,11 +110,21 @@ Dans les cas bloquants, le curated n'est pas modifié (hash SHA-256 identique av
 
 <img src="atlas_collections.png" alt="Collections MongoDB Atlas" width="500">
 
-**Consultation.** Tableau de bord Metabase (http://localhost:3000, lecture des vues KPI et de la table `runs`), requêtes SQL sur les vues, tableau de bord Streamlit de secours.
+**Usage de la couche silver : modèle de classification.** Pour vérifier quels indicateurs portent un signal, deux modèles (régression logistique, forêt aléatoire) estiment le diagnostic à partir des 9 indicateurs cliniques du curated. Ils sont comparés à une baseline qui prédit toujours la classe majoritaire, évalués par validation croisée à 5 plis puis sur un jeu de test de 393 lignes, et le rapport conserve le hash du curated lu.
+
+| Modèle | AUC (validation croisée) | AUC (test) | Rappel |
+|---|---|---|---|
+| Baseline majoritaire | 0,500 | 0,500 | 0,00 |
+| Régression logistique | 0,711 | 0,722 | 0,60 |
+| Forêt aléatoire | 0,715 | 0,757 | 0,48 |
+
+Le signal est réel mais modeste, et les deux modèles sont à égalité en validation croisée. L'accuracy est trompeuse (la baseline atteint 0,646 sans détecter aucun patient) : on retient l'AUC et le rappel. Par importance par permutation, le MMSE (baisse d'AUC de 0,16) et les plaintes de mémoire (0,11) portent presque tout le signal ; la tension, le cholestérol et l'âge n'apportent presque rien, ce qui confirme les KPI et ajoute les plaintes de mémoire comme indicateur à étudier. Données synthétiques : aucune valeur médicale.
+
+**Consultation.** Tableau de bord Metabase (http://localhost:3000, lecture des vues KPI et de la table `runs`), requêtes SQL sur les vues, tableau de bord Streamlit de secours, rapport du modèle (`reports/model_report.json`).
 
 ## 5. Décisions, limites et perspectives
 
-**Décision d'architecture (ADR 001).** Quatre options comparées : fichiers seuls, PostgreSQL seul (articles en JSONB), PostgreSQL + MongoDB Atlas, MongoDB seul. Option retenue : PostgreSQL pour les patients (données tabulaires, schéma fixe, clé primaire, vues KPI) et MongoDB Atlas pour les articles (documents semi-structurés, clé `pmid`). Architecture batch, raw en fichiers.
+**Décision d'architecture (ADR 001).** Quatre options comparées : fichiers seuls, PostgreSQL seul (articles en JSONB), PostgreSQL + MongoDB Atlas, MongoDB seul. Option retenue : PostgreSQL pour les patients (données tabulaires, schéma fixe, clé primaire, vues KPI) et MongoDB Atlas pour les articles (documents semi-structurés, clé `pmid`). Architecture batch, raw en fichiers. Pour le modèle, des algorithmes simples et interprétables (scikit-learn) suffisent à une démonstration sur 1963 lignes.
 
 **Compromis assumés.** Deux systèmes de stockage pour de petits volumes. PostgreSQL avec une colonne JSONB aurait suffi techniquement pour 195 articles ; MongoDB a été retenu sur la recommandation de l'enseignant, avec un rôle volontairement limité. Condition de réexamen : revenir à PostgreSQL seul si la littérature reste de quelques centaines d'articles sans besoin de recherche textuelle.
 
@@ -127,8 +137,9 @@ Dans les cas bloquants, le curated n'est pas modifié (hash SHA-256 identique av
 - Le fichier des rejets conserve la ligne source complète (acceptable en synthétique, à filtrer sur des données réelles).
 - PubMed : 50 articles récents par indicateur, requête simple, pas de revue systématique ; pas de clé commune avec les patients.
 - MongoDB Atlas dépend d'un compte externe (mode dégradé : JSONL local).
+- Modèle : démonstration seulement (9 indicateurs, un seul découpage train/test, pas de réglage des hyperparamètres).
 - Aucune alerte envoyée, pas de planification automatique, fraîcheur non contrôlée pour PubMed.
 
-**Perspectives.** Téléchargement par l'API Kaggle, exécution automatisée (GitHub Actions + tests), tests automatisés de la seconde source, alertes en cas d'échec, modèle de classification du diagnostic, export Parquet, intégration d'images IRM avec stockage objet.
+**Perspectives.** Téléchargement par l'API Kaggle, exécution automatisée (GitHub Actions + tests), alertes en cas d'échec, réentraînement du modèle avec davantage d'indicateurs du jeu source, export Parquet, intégration d'images IRM avec stockage objet.
 
 **Usage d'outils d'IA.** Claude (Anthropic) a assisté la structuration, des squelettes de code, la documentation et la relecture ; le code a été exécuté, testé et vérifié (voir la section 16 du README pour le détail et les parties retravaillées personnellement).

@@ -8,3 +8,4 @@ psycopg[binary]
 requests 
 pymongo 
 python-dotenv
+scikit-learn
