@@ -3,11 +3,9 @@ pyyaml
 pytest
 matplotlib
 streamlit
-pyyaml
 psycopg[binary]
-requests 
-pymongo 
+requests
+pymongo
 python-dotenv
 scikit-learn
-yarrow
-python-dotenvpyarrow
+pyarrow
