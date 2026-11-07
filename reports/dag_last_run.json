@@ -1,0 +1,38 @@
+{
+  "run_id": "20261107T103333Z",
+  "status": "FAIL",
+  "tasks": {
+    "patients": {
+      "status": "SUCCESS",
+      "duration_seconds": 0.75,
+      "deps": []
+    },
+    "pubmed": {
+      "status": "SUCCESS",
+      "duration_seconds": null,
+      "deps": []
+    },
+    "export_parquet": {
+      "status": "FAILED",
+      "duration_seconds": 0.53,
+      "deps": [
+        "patients"
+      ]
+    },
+    "model": {
+      "status": "SUCCESS",
+      "duration_seconds": 4.7,
+      "deps": [
+        "patients"
+      ]
+    },
+    "purge_dry_run": {
+      "status": "SUCCESS",
+      "duration_seconds": 0.08,
+      "deps": [
+        "patients",
+        "pubmed"
+      ]
+    }
+  }
+}

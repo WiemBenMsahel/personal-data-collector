@@ -1,0 +1,38 @@
+{
+  "run_id": "20261107T103327Z",
+  "status": "FAIL",
+  "tasks": {
+    "patients": {
+      "status": "FAILED",
+      "duration_seconds": 0.69,
+      "deps": []
+    },
+    "pubmed": {
+      "status": "SUCCESS",
+      "duration_seconds": 5.29,
+      "deps": []
+    },
+    "export_parquet": {
+      "status": "UPSTREAM_FAILED",
+      "duration_seconds": null,
+      "deps": [
+        "patients"
+      ]
+    },
+    "model": {
+      "status": "UPSTREAM_FAILED",
+      "duration_seconds": null,
+      "deps": [
+        "patients"
+      ]
+    },
+    "purge_dry_run": {
+      "status": "UPSTREAM_FAILED",
+      "duration_seconds": null,
+      "deps": [
+        "patients",
+        "pubmed"
+      ]
+    }
+  }
+}

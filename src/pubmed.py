@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+import yaml
 
 try:
     from dotenv import load_dotenv
@@ -28,15 +29,15 @@ RAW_DIR = Path("data/raw")
 CURATED_FILE = Path("data/curated/pubmed_articles.jsonl")
 REJECTED_FILE = Path("data/rejected/pubmed_rejected.jsonl")
 REPORT_DIR = Path("reports/runs")
-MAX_PER_INDICATOR = 50
 DB_NAME = "alzheimer_hub"
+CONTRACT_FILE = Path(__file__).resolve().parents[1] / "config" / "pubmed_contract.yaml"
 
-INDICATORS = {
-    "mmse": '"Alzheimer Disease"[MeSH Terms] AND ("Mini-Mental State"[Title/Abstract] OR MMSE[Title/Abstract])',
-    "blood_pressure": '"Alzheimer Disease"[MeSH Terms] AND ("blood pressure"[Title/Abstract] OR hypertension[MeSH Terms])',
-    "cholesterol": '"Alzheimer Disease"[MeSH Terms] AND cholesterol[Title/Abstract]',
-    "age": '"Alzheimer Disease"[MeSH Terms] AND "Age Factors"[MeSH Terms]',
-}
+
+def load_contract() -> dict:
+    """Le contrat est la source de verite : requetes, regles, seuils, fraicheur."""
+    with CONTRACT_FILE.open(encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("pubmed")
@@ -53,9 +54,9 @@ def _get(path: str, **params) -> requests.Response:
     return resp
 
 
-def search(term: str):
+def search(term: str, retmax: int):
     """Retourne (nombre total de resultats PubMed, liste des PMID les plus recents)."""
-    res = _get("esearch.fcgi", db="pubmed", term=term, retmax=MAX_PER_INDICATOR,
+    res = _get("esearch.fcgi", db="pubmed", term=term, retmax=retmax,
                retmode="json", sort="pub_date").json()["esearchresult"]
     return int(res["count"]), res["idlist"]
 
@@ -87,9 +88,12 @@ def parse(xml_bytes: bytes) -> list:
 
 
 # ---------- Validation ----------
-def validate(rows: list):
-    """Regles : pmid_present, title_present, year_valid, duplicate_pmid (rejet) ; abstract_present (signalement)."""
-    max_year = datetime.now(timezone.utc).year + 1
+def validate(rows: list, contract: dict = None):
+    """Regles : pmid_present, title_present, year_valid, duplicate_pmid (rejet) ; abstract_present (signalement).
+    Les bornes de l'annee viennent du contrat."""
+    contract = contract or load_contract()
+    min_year = contract["rules"]["year_min"]
+    max_year = datetime.now(timezone.utc).year + contract["rules"]["year_max_offset"]
     accepted, rejected, seen = [], [], set()
     failures = {"pmid_present": 0, "title_present": 0, "year_valid": 0,
                 "duplicate_pmid": 0, "abstract_present": 0}
@@ -101,7 +105,7 @@ def validate(rows: list):
             reasons.append("duplicate_pmid")
         if not r["title"]:
             reasons.append("title_present")
-        if r["year"] is None or not (1900 <= r["year"] <= max_year):
+        if r["year"] is None or not (min_year <= r["year"] <= max_year):
             reasons.append("year_valid")
         if not r["has_abstract"]:
             failures["abstract_present"] += 1  # signalement seulement
@@ -115,12 +119,34 @@ def validate(rows: list):
     return accepted, rejected, failures
 
 
+def check_reject_rate(n_rejected: int, n_total: int, contract: dict = None) -> float:
+    """Bloque la publication si trop d'articles sont rejetes (meme logique que pour les patients)."""
+    contract = contract or load_contract()
+    rate = n_rejected / n_total if n_total else 1.0
+    limit = contract["thresholds"]["max_reject_rate"]
+    if rate > limit:
+        raise ValueError(f"Taux de rejet {rate * 100:.1f}% > seuil {limit * 100:.0f}% : publication bloquee")
+    return rate
+
+
+def check_freshness(accepted: list, contract: dict = None):
+    """Age de la donnee la plus recente : annee du dernier article, comparee au seuil du contrat."""
+    contract = contract or load_contract()
+    years = [r["year"] for r in accepted if r["year"]]
+    if not years:
+        return None, "UNKNOWN"
+    newest = max(years)
+    age = datetime.now(timezone.utc).year - newest
+    limit = contract["freshness"]["max_newest_article_age_years"]
+    return newest, ("STALE" if age > limit else "OK")
+
+
 # ---------- Publication ----------
 def _db():
-    from pymongo import MongoClient
     uri = os.getenv("MONGODB_URI")
     if not uri:
         return None, None
+    from pymongo import MongoClient
     client = MongoClient(uri, serverSelectionTimeoutMS=8000)
     return client, client[DB_NAME]
 
@@ -156,7 +182,7 @@ def kpi():
             {"$unwind": "$indicators"},
             {"$group": {"_id": "$indicators", "articles_stockes": {"$sum": 1}}}])}
         print(f"{'indicateur':<16}{'articles PubMed (total)':>26}{'articles stockes':>20}")
-        for name in INDICATORS:
+        for name in load_contract()["indicators"]:
             total = last.get(name, {}).get("pubmed_total")
             print(f"{name:<16}{str(total):>26}{stored.get(name, {}).get('articles_stockes', 0):>20}")
         print("Documents dans la collection articles :", db["articles"].count_documents({}))
@@ -170,9 +196,12 @@ def main() -> int:
     t0 = time.time()
     report = {"pipeline": "pubmed-literature", "run_id": run_id, "status": "FAIL"}
     try:
+        contract = load_contract()
+        report["contract_version"] = contract["version"]
+        retmax = contract["collection"]["max_articles_per_indicator"]
         searches, pmid_to_ind = [], {}
-        for name, term in INDICATORS.items():
-            total, ids = search(term)
+        for name, term in contract["indicators"].items():
+            total, ids = search(term, retmax)
             searches.append({"indicator": name, "query": term, "pubmed_total": total,
                              "retrieved": len(ids)})
             for pmid in ids:
@@ -192,27 +221,37 @@ def main() -> int:
             r["indicators"] = sorted(pmid_to_ind.get(r["pmid"], []))
             r["collected_at"] = datetime.now(timezone.utc).isoformat()
             r["source_file"] = raw_path.name
-        accepted, rejected, failures = validate(rows)
+        accepted, rejected, failures = validate(rows, contract)
         log.info("%s | Validation : %d acceptes, %d rejetes", run_id, len(accepted), len(rejected))
         for rule, n in failures.items():
             if n:
                 log.warning("%s | Regle %s : %d echecs", run_id, rule, n)
 
-        CURATED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # Les rejets sont toujours conserves, meme si la publication est ensuite bloquee.
         REJECTED_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with CURATED_FILE.open("w", encoding="utf-8") as f:
-            for d in accepted:
-                f.write(json.dumps(d, ensure_ascii=False) + "\n")
         with REJECTED_FILE.open("w", encoding="utf-8") as f:
             for d in rejected:
                 f.write(json.dumps(d, ensure_ascii=False) + "\n")
+        report.update({"input_rows": len(rows), "accepted_rows": len(accepted),
+                       "rejected_rows": len(rejected), "rule_failures": failures,
+                       "source_file": raw_path.name})
+        report["reject_rate"] = round(check_reject_rate(len(rejected), len(rows), contract), 4)
+
+        newest_year, freshness = check_freshness(accepted, contract)
+        report.update({"newest_article_year": newest_year, "freshness": freshness})
+        if freshness == "STALE":
+            log.warning("%s | Fraicheur : article le plus recent de %s (seuil %d an)",
+                        run_id, newest_year, contract["freshness"]["max_newest_article_age_years"])
+
+        CURATED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with CURATED_FILE.open("w", encoding="utf-8") as f:
+            for d in accepted:
+                f.write(json.dumps(d, ensure_ascii=False) + "\n")
 
         n_mongo = publish_mongo(accepted, searches, run_id)
-        report.update({
-            "input_rows": len(rows), "accepted_rows": len(accepted), "rejected_rows": len(rejected),
-            "rule_failures": failures, "mongo_documents": n_mongo, "source_file": raw_path.name,
-            "status": "PASS_WITH_WARNINGS" if (rejected or failures["abstract_present"]) else "PASS",
-        })
+        report["mongo_documents"] = n_mongo
+        warned = bool(rejected) or failures["abstract_present"] or freshness == "STALE"
+        report["status"] = "PASS_WITH_WARNINGS" if warned else "PASS"
         if n_mongo is not None:
             log.info("%s | MongoDB Atlas mis a jour : %d articles", run_id, n_mongo)
     except Exception as exc:  # incident : on journalise, on garde la preuve, on sort en erreur

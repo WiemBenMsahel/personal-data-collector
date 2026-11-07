@@ -1,0 +1,36 @@
+# Contrat de donnees de la seconde source (PubMed). Source de verite lue par src/pubmed.py.
+version: "1.0"
+dataset: pubmed_articles
+source: "PubMed, API NCBI E-utilities (esearch, efetch)"
+grain: "un document = un article PubMed"
+business_key: pmid
+storage: "MongoDB Atlas, base alzheimer_hub, collection articles"
+minimisation: "metadonnees seulement (pas de texte de resume)"
+
+fields:
+  pmid:         {type: string,       required: true,  description: "Identifiant PubMed (cle metier)"}
+  title:        {type: string,       required: true,  description: "Titre de l'article"}
+  journal:      {type: string,       required: false, description: "Revue"}
+  year:         {type: integer,      required: true,  description: "Annee de publication"}
+  has_abstract: {type: boolean,      required: false, description: "Un resume existe dans PubMed"}
+  mesh_terms:   {type: "list[string]", required: false, description: "Termes MeSH"}
+  indicators:   {type: "list[string]", required: true,  description: "Indicateurs cliniques lies a l'article"}
+
+collection:
+  max_articles_per_indicator: 50
+
+indicators:
+  mmse: '"Alzheimer Disease"[MeSH Terms] AND ("Mini-Mental State"[Title/Abstract] OR MMSE[Title/Abstract])'
+  blood_pressure: '"Alzheimer Disease"[MeSH Terms] AND ("blood pressure"[Title/Abstract] OR hypertension[MeSH Terms])'
+  cholesterol: '"Alzheimer Disease"[MeSH Terms] AND cholesterol[Title/Abstract]'
+  age: '"Alzheimer Disease"[MeSH Terms] AND "Age Factors"[MeSH Terms]'
+
+rules:
+  year_min: 1900
+  year_max_offset: 1          # annee courante + 1
+
+thresholds:
+  max_reject_rate: 0.20       # au-dela, la publication est bloquee (FAIL)
+
+freshness:
+  max_newest_article_age_years: 1   # STALE si l'article le plus recent a plus de 1 an
